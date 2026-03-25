@@ -205,7 +205,9 @@ app.post('/playlists/:playlistId/add/:songId', async (req, res) => {
 });
 
 // 🚀 LANCEMENT SERVEUR
-const PORT = 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Serveur lancé sur http://localhost:${PORT}`);
+// Utilise le port de Render (10000) ou 5000 par défaut en local
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Serveur en ligne sur le port ${PORT}`);
 });
