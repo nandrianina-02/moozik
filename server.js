@@ -5,10 +5,12 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 
-// --- CORS MANUEL (plus fiable que le package cors sur Render) ---
+// --- CORS MANUEL ---
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -30,7 +32,7 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("✅ Connecté à MongoDB Atlas"))
   .catch(err => console.error("❌ Erreur MongoDB :", err));
 
-// --- SCHEMA SONG ---
+// --- SCHEMAS ---
 const SongSchema = new mongoose.Schema({
   titre: String,
   artiste: String,
@@ -42,13 +44,35 @@ const SongSchema = new mongoose.Schema({
 
 const Song = mongoose.model('Song', SongSchema);
 
-// --- SCHEMA PLAYLIST ---
 const PlaylistSchema = new mongoose.Schema({
   nom: String,
   musiques: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Song' }]
 }, { timestamps: true });
 
 const Playlist = mongoose.model('Playlist', PlaylistSchema);
+
+const AdminSchema = new mongoose.Schema({
+  email: { type: String, unique: true },
+  password: String
+}, { timestamps: true });
+
+const Admin = mongoose.model('Admin', AdminSchema);
+
+// --- MIDDLEWARE JWT ---
+const requireAdmin = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ message: "Non autorisé" });
+  }
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.admin = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: "Token invalide" });
+  }
+};
 
 // --- CONFIG MULTER ---
 const storage = multer.diskStorage({
@@ -69,9 +93,66 @@ const upload = multer({
   }
 });
 
-// --- ROUTES ---
+// =====================
+// --- ROUTES AUTH ---
+// =====================
 
-// 🎵 GET toutes les musiques
+// 🔐 CRÉER ADMIN (à utiliser une seule fois pour initialiser)
+app.post('/admin/register', async (req, res) => {
+  try {
+    const { email, password, secret } = req.body;
+
+    // Vérification du secret d'enregistrement
+    if (secret !== process.env.REGISTER_SECRET) {
+      return res.status(403).json({ message: "Secret invalide" });
+    }
+
+    const existing = await Admin.findOne({ email });
+    if (existing) return res.status(400).json({ message: "Admin déjà existant" });
+
+    const hashed = await bcrypt.hash(password, 12);
+    const admin = new Admin({ email, password: hashed });
+    await admin.save();
+
+    res.json({ message: "Admin créé avec succès ✅" });
+  } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+// 🔐 LOGIN ADMIN
+app.post('/admin/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const admin = await Admin.findOne({ email });
+    if (!admin) return res.status(401).json({ message: "Email ou mot de passe incorrect" });
+
+    const valid = await bcrypt.compare(password, admin.password);
+    if (!valid) return res.status(401).json({ message: "Email ou mot de passe incorrect" });
+
+    const token = jwt.sign(
+      { id: admin._id, email: admin.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({ token, email: admin.email });
+  } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+// 🔐 VÉRIFIER TOKEN
+app.get('/admin/verify', requireAdmin, (req, res) => {
+  res.json({ valid: true, email: req.admin.email });
+});
+
+// =====================
+// --- ROUTES SONGS ---
+// =====================
+
+// 🎵 GET toutes les musiques (public)
 app.get('/songs', async (req, res) => {
   try {
     const songs = await Song.find().sort({ createdAt: -1 });
@@ -81,10 +162,9 @@ app.get('/songs', async (req, res) => {
   }
 });
 
-// 🎵 UPLOAD musique
-app.post('/upload', upload.single('audio'), async (req, res) => {
+// 🎵 UPLOAD musique (admin only)
+app.post('/upload', requireAdmin, upload.single('audio'), async (req, res) => {
   try {
-    // ✅ URL en dur en https pour éviter le mixed-content
     const BASE_URL = `https://moozik-gft1.onrender.com`;
 
     const newSong = new Song({
@@ -102,8 +182,8 @@ app.post('/upload', upload.single('audio'), async (req, res) => {
   }
 });
 
-// ❌ DELETE musique
-app.delete('/songs/:id', async (req, res) => {
+// ❌ DELETE musique (admin only)
+app.delete('/songs/:id', requireAdmin, async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
     if (!song) return res.status(404).send("Introuvable");
@@ -112,27 +192,24 @@ app.delete('/songs/:id', async (req, res) => {
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
     await Song.findByIdAndDelete(req.params.id);
-
     res.json({ message: "Supprimé avec succès" });
   } catch (err) {
     res.status(500).json(err);
   }
 });
 
-// ✏️ UPDATE musique
-app.put('/songs/:id', async (req, res) => {
+// ✏️ UPDATE musique (admin only)
+app.put('/songs/:id', requireAdmin, async (req, res) => {
   try {
     const { titre, artiste } = req.body;
-
     await Song.findByIdAndUpdate(req.params.id, { titre, artiste });
-
     res.json({ message: "Mis à jour !" });
   } catch (err) {
     res.status(500).json(err);
   }
 });
 
-// ❤️ LIKE / UNLIKE
+// ❤️ LIKE / UNLIKE (public)
 app.put('/songs/:id/like', async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
@@ -140,47 +217,33 @@ app.put('/songs/:id/like', async (req, res) => {
 
     song.liked = !song.liked;
     await song.save();
-
     res.json(song);
   } catch (err) {
     res.status(500).json(err);
   }
 });
 
-// 🔍 SEARCH
+// 🔍 SEARCH (public)
 app.get('/search', async (req, res) => {
   try {
     const query = req.query.q;
-
     const songs = await Song.find({
       $or: [
         { titre: { $regex: query, $options: 'i' } },
         { artiste: { $regex: query, $options: 'i' } }
       ]
     });
-
     res.json(songs);
   } catch (err) {
     res.status(500).json(err);
   }
 });
 
-// 📂 CRÉER PLAYLIST
-app.post('/playlists', async (req, res) => {
-  try {
-    const playlist = new Playlist({
-      nom: req.body.nom,
-      musiques: []
-    });
+// ========================
+// --- ROUTES PLAYLISTS ---
+// ========================
 
-    await playlist.save();
-    res.json(playlist);
-  } catch (err) {
-    res.status(500).json(err);
-  }
-});
-
-// 📂 GET PLAYLISTS
+// 📂 GET PLAYLISTS (public)
 app.get('/playlists', async (req, res) => {
   try {
     const playlists = await Playlist.find().populate('musiques');
@@ -190,15 +253,25 @@ app.get('/playlists', async (req, res) => {
   }
 });
 
-// ➕ AJOUTER MUSIQUE À PLAYLIST
-app.post('/playlists/:playlistId/add/:songId', async (req, res) => {
+// 📂 CRÉER PLAYLIST (admin only)
+app.post('/playlists', requireAdmin, async (req, res) => {
+  try {
+    const playlist = new Playlist({ nom: req.body.nom, musiques: [] });
+    await playlist.save();
+    res.json(playlist);
+  } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+// ➕ AJOUTER MUSIQUE À PLAYLIST (admin only)
+app.post('/playlists/:playlistId/add/:songId', requireAdmin, async (req, res) => {
   try {
     const playlist = await Playlist.findById(req.params.playlistId);
     if (!playlist) return res.status(404).send("Playlist introuvable");
 
     playlist.musiques.addToSet(req.params.songId);
     await playlist.save();
-
     res.json(playlist);
   } catch (err) {
     res.status(500).json(err);
