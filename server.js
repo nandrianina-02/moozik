@@ -163,20 +163,25 @@ app.get('/songs', async (req, res) => {
 });
 
 // 🎵 UPLOAD musique (admin only)
-app.post('/upload', requireAdmin, upload.single('audio'), async (req, res) => {
+app.post('/upload', requireAdmin, upload.array('audio', 20), async (req, res) => {
   try {
     const BASE_URL = `https://moozik-gft1.onrender.com`;
 
-    const newSong = new Song({
-      titre: req.file.originalname.replace('.mp3', ''),
-      artiste: "Artiste Local",
-      src: `${BASE_URL}/uploads/${req.file.filename}`,
-      image: `https://api.dicebear.com/7.x/shapes/svg?seed=${req.file.filename}`,
-      filename: req.file.filename
-    });
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ message: "Aucun fichier envoyé" });
+    }
 
-    await newSong.save();
-    res.json(newSong);
+    const songs = req.files.map(file => ({
+      titre: file.originalname.replace('.mp3', ''),
+      artiste: "Artiste Local",
+      src: `${BASE_URL}/uploads/${file.filename}`,
+      image: `https://api.dicebear.com/7.x/shapes/svg?seed=${file.filename}`,
+      filename: file.filename
+    }));
+
+    const savedSongs = await Song.insertMany(songs);
+
+    res.json(savedSongs);
   } catch (err) {
     res.status(500).json(err);
   }
