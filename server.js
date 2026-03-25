@@ -11,7 +11,7 @@ const app = express();
 
 // --- MIDDLEWARE ---
 const corsOptions = {
-  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: ['http://localhost:5173', 'http://127.0.0.1:5173', 'https://moziik.netlify.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 };
@@ -84,7 +84,8 @@ app.get('/songs', async (req, res) => {
 // 🎵 UPLOAD musique
 app.post('/upload', upload.single('audio'), async (req, res) => {
   try {
-    const BASE_URL = req.protocol + '://' + req.get('host');
+    // ✅ FIX : forcer https pour éviter le mixed-content bloqué par les navigateurs
+    const BASE_URL = `https://${req.get('host')}`;
 
     const newSong = new Song({
       titre: req.file.originalname.replace('.mp3', ''),
@@ -205,7 +206,6 @@ app.post('/playlists/:playlistId/add/:songId', async (req, res) => {
 });
 
 // 🚀 LANCEMENT SERVEUR
-// Utilise le port de Render (10000) ou 5000 par défaut en local
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, '0.0.0.0', () => {
