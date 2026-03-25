@@ -1,7 +1,6 @@
 require('dotenv').config();
 
 const express = require('express');
-const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -9,16 +8,15 @@ const mongoose = require('mongoose');
 
 const app = express();
 
-// --- MIDDLEWARE ---
-const corsOptions = {
-  origin: ['*'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-};
+// --- CORS MANUEL (plus fiable que le package cors sur Render) ---
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
 
-app.use(cors(corsOptions));
-app.options('/{*path}', cors(corsOptions));
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
@@ -86,8 +84,8 @@ app.get('/songs', async (req, res) => {
 // 🎵 UPLOAD musique
 app.post('/upload', upload.single('audio'), async (req, res) => {
   try {
-    // ✅ FIX : forcer https pour éviter le mixed-content bloqué par les navigateurs
-    const BASE_URL = `https://${req.get('host')}`;
+    // ✅ URL en dur en https pour éviter le mixed-content
+    const BASE_URL = `https://moozik-gft1.onrender.com`;
 
     const newSong = new Song({
       titre: req.file.originalname.replace('.mp3', ''),
@@ -211,5 +209,5 @@ app.post('/playlists/:playlistId/add/:songId', async (req, res) => {
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Serveur en ligne sur le port ${PORT}`);
+  console.log(`🚀 Serveur en ligne sur le port ${PORT}`);
 });
