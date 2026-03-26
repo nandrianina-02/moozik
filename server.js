@@ -10,7 +10,7 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 
-// --- CORS MANUEL ---
+// --- CORS ---
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -21,7 +21,6 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
 if (!fs.existsSync('./uploads')) fs.mkdirSync('./uploads');
 
 // --- MONGODB ---
@@ -41,7 +40,6 @@ const ArtistSchema = new mongoose.Schema({
   password: { type: String },
   role: { type: String, default: 'artist' }
 }, { timestamps: true });
-
 const Artist = mongoose.model('Artist', ArtistSchema);
 
 const SongSchema = new mongoose.Schema({
@@ -56,34 +54,48 @@ const SongSchema = new mongoose.Schema({
   plays: { type: Number, default: 0 },
   ordre: { type: Number, default: 0 }
 }, { timestamps: true });
-
 const Song = mongoose.model('Song', SongSchema);
 
+// Playlist Admin (publique par défaut, visible par tous)
 const PlaylistSchema = new mongoose.Schema({
   nom: String,
   musiques: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Song' }]
 }, { timestamps: true });
-
 const Playlist = mongoose.model('Playlist', PlaylistSchema);
+
+// Playlist Utilisateur (privée ou publique)
+const UserPlaylistSchema = new mongoose.Schema({
+  nom: { type: String, required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  musiques: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Song' }],
+  isPublic: { type: Boolean, default: false }
+}, { timestamps: true });
+const UserPlaylist = mongoose.model('UserPlaylist', UserPlaylistSchema);
 
 const AdminSchema = new mongoose.Schema({
   email: { type: String, unique: true },
   password: String
 }, { timestamps: true });
-
 const Admin = mongoose.model('Admin', AdminSchema);
+
+// Utilisateur standard (peut créer des playlists, liker)
+const UserSchema = new mongoose.Schema({
+  email: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
+  nom: { type: String, default: '' },
+  role: { type: String, default: 'user' }
+}, { timestamps: true });
+const User = mongoose.model('User', UserSchema);
 
 // =====================
 // --- MULTER ---
 // =====================
-
 const storage = multer.diskStorage({
   destination: './uploads',
   filename: (req, file, cb) => {
     cb(null, Date.now() + '-' + file.originalname.replace(/\s+/g, '_'));
   }
 });
-
 const upload = multer({
   storage,
   fileFilter: (req, file, cb) => {
@@ -94,18 +106,16 @@ const upload = multer({
 });
 
 // =====================
-// --- MIDDLEWARE JWT ---
+// --- MIDDLEWARES JWT ---
 // =====================
-
 const requireAdmin = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ message: "Non autorisé" });
   try {
     req.admin = jwt.verify(token, process.env.JWT_SECRET);
+    if (req.admin.role !== 'admin') return res.status(403).json({ message: "Accès refusé" });
     next();
-  } catch {
-    return res.status(401).json({ message: "Token invalide" });
-  }
+  } catch { return res.status(401).json({ message: "Token invalide" }); }
 };
 
 const requireArtist = (req, res, next) => {
@@ -113,14 +123,10 @@ const requireArtist = (req, res, next) => {
   if (!token) return res.status(401).json({ message: "Non autorisé" });
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    if (decoded.role !== 'artist' && decoded.role !== 'admin') {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
+    if (decoded.role !== 'artist' && decoded.role !== 'admin') return res.status(403).json({ message: "Accès refusé" });
     req.user = decoded;
     next();
-  } catch {
-    return res.status(401).json({ message: "Token invalide" });
-  }
+  } catch { return res.status(401).json({ message: "Token invalide" }); }
 };
 
 const requireAdminOrArtist = (req, res, next) => {
@@ -129,15 +135,22 @@ const requireAdminOrArtist = (req, res, next) => {
   try {
     req.user = jwt.verify(token, process.env.JWT_SECRET);
     next();
-  } catch {
-    return res.status(401).json({ message: "Token invalide" });
-  }
+  } catch { return res.status(401).json({ message: "Token invalide" }); }
+};
+
+// Auth for any logged-in user (admin, artist, user)
+const requireAuth = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ message: "Non autorisé" });
+  try {
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch { return res.status(401).json({ message: "Token invalide" }); }
 };
 
 // =====================
 // --- AUTH ADMIN ---
 // =====================
-
 app.post('/admin/register', async (req, res) => {
   try {
     const { email, password, secret } = req.body;
@@ -167,10 +180,44 @@ app.get('/admin/verify', requireAdmin, (req, res) => {
 });
 
 // =====================
-// --- AUTH ARTISTE ---
+// --- AUTH UTILISATEUR STANDARD ---
 // =====================
 
-// Admin crée un artiste avec accès
+// Inscription
+app.post('/users/register', async (req, res) => {
+  try {
+    const { email, password, nom } = req.body;
+    if (!email || !password) return res.status(400).json({ message: "Email et mot de passe requis" });
+    const existing = await User.findOne({ email });
+    if (existing) return res.status(400).json({ message: "Cet email est déjà utilisé" });
+    const hashed = await bcrypt.hash(password, 12);
+    const user = await new User({ email, password: hashed, nom: nom || email.split('@')[0] }).save();
+    const token = jwt.sign({ id: user._id, email: user.email, nom: user.nom, role: 'user' }, process.env.JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, email: user.email, nom: user.nom, role: 'user', userId: user._id });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Connexion
+app.post('/users/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    if (!user) return res.status(401).json({ message: "Email ou mot de passe incorrect" });
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(401).json({ message: "Email ou mot de passe incorrect" });
+    const token = jwt.sign({ id: user._id, email: user.email, nom: user.nom, role: 'user' }, process.env.JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, email: user.email, nom: user.nom, role: 'user', userId: user._id });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Vérification token utilisateur
+app.get('/users/verify', requireAuth, (req, res) => {
+  res.json({ valid: true, ...req.user });
+});
+
+// =====================
+// --- AUTH ARTISTE ---
+// =====================
 app.post('/artists', requireAdmin, async (req, res) => {
   try {
     const { nom, bio, email, password } = req.body;
@@ -181,7 +228,6 @@ app.post('/artists', requireAdmin, async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-// Login artiste
 app.post('/artists/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -198,7 +244,6 @@ app.get('/artists/verify', requireArtist, (req, res) => {
   res.json({ valid: true, ...req.user });
 });
 
-// GET tous les artistes (public)
 app.get('/artists', async (req, res) => {
   try {
     const artists = await Artist.find().select('-password').sort({ nom: 1 });
@@ -206,7 +251,6 @@ app.get('/artists', async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-// GET un artiste (public)
 app.get('/artists/:id', async (req, res) => {
   try {
     const artist = await Artist.findById(req.params.id).select('-password');
@@ -216,21 +260,16 @@ app.get('/artists/:id', async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-// UPDATE artiste (admin)
 app.put('/artists/:id', requireAdmin, upload.single('image'), async (req, res) => {
   try {
     const { nom, bio } = req.body;
     const update = { nom, bio };
-    if (req.file) {
-      const BASE_URL = `https://moozik-gft1.onrender.com`;
-      update.image = `${BASE_URL}/uploads/${req.file.filename}`;
-    }
+    if (req.file) update.image = `https://moozik-gft1.onrender.com/uploads/${req.file.filename}`;
     const artist = await Artist.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
     res.json(artist);
   } catch (err) { res.status(500).json(err); }
 });
 
-// DELETE artiste (admin)
 app.delete('/artists/:id', requireAdmin, async (req, res) => {
   try {
     await Artist.findByIdAndDelete(req.params.id);
@@ -241,8 +280,6 @@ app.delete('/artists/:id', requireAdmin, async (req, res) => {
 // =====================
 // --- ROUTES SONGS ---
 // =====================
-
-// GET toutes les musiques (public)
 app.get('/songs', async (req, res) => {
   try {
     const songs = await Song.find().sort({ ordre: 1, createdAt: -1 }).populate('artisteId', 'nom image');
@@ -250,23 +287,19 @@ app.get('/songs', async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-// UPLOAD musique (admin ou artiste)
 app.post('/upload', requireAdminOrArtist, upload.fields([
   { name: 'audio', maxCount: 1 },
   { name: 'image', maxCount: 1 }
 ]), async (req, res) => {
   try {
-    const BASE_URL = `https://moozik-gft1.onrender.com`;
+    const BASE_URL = 'https://moozik-gft1.onrender.com';
     const audioFile = req.files['audio']?.[0];
     const imageFile = req.files['image']?.[0];
-
     if (!audioFile) return res.status(400).json({ message: "Fichier audio manquant" });
 
-    // Si c'est un artiste, on associe automatiquement
     const isArtist = req.user.role === 'artist';
     const artisteId = isArtist ? req.user.id : (req.body.artisteId || null);
     let artisteName = req.body.artiste || "Artiste Local";
-
     if (isArtist) {
       artisteName = req.user.nom;
     } else if (artisteId) {
@@ -279,7 +312,6 @@ app.post('/upload', requireAdminOrArtist, upload.fields([
       : `https://api.dicebear.com/7.x/shapes/svg?seed=${audioFile.filename}`;
 
     const count = await Song.countDocuments();
-
     const newSong = new Song({
       titre: req.body.titre || audioFile.originalname.replace('.mp3', '').replace(/_/g, ' '),
       artiste: artisteName,
@@ -290,13 +322,11 @@ app.post('/upload', requireAdminOrArtist, upload.fields([
       audioFilename: audioFile.filename,
       ordre: count
     });
-
     await newSong.save();
     res.json(newSong);
   } catch (err) { res.status(500).json(err); }
 });
 
-// INCRÉMENTER les plays (public)
 app.put('/songs/:id/play', async (req, res) => {
   try {
     const song = await Song.findByIdAndUpdate(req.params.id, { $inc: { plays: 1 } }, { new: true });
@@ -304,48 +334,37 @@ app.put('/songs/:id/play', async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-// DELETE musique (admin ou artiste propriétaire)
 app.delete('/songs/:id', requireAdminOrArtist, async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
     if (!song) return res.status(404).send("Introuvable");
-
-    // Artiste ne peut supprimer que ses propres musiques
     if (req.user.role === 'artist' && String(song.artisteId) !== String(req.user.id)) {
       return res.status(403).json({ message: "Vous ne pouvez supprimer que vos propres musiques" });
     }
-
     const filePath = path.join(__dirname, 'uploads', song.filename);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-
     await Song.findByIdAndDelete(req.params.id);
     res.json({ message: "Supprimé avec succès" });
   } catch (err) { res.status(500).json(err); }
 });
 
-// UPDATE musique (admin ou artiste propriétaire)
 app.put('/songs/:id', requireAdminOrArtist, upload.single('image'), async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
     if (!song) return res.status(404).send("Introuvable");
-
     if (req.user.role === 'artist' && String(song.artisteId) !== String(req.user.id)) {
       return res.status(403).json({ message: "Accès refusé" });
     }
-
-    const BASE_URL = `https://moozik-gft1.onrender.com`;
     const update = {};
     if (req.body.titre) update.titre = req.body.titre;
     if (req.body.artiste && req.user.role === 'admin') update.artiste = req.body.artiste;
     if (req.body.artisteId && req.user.role === 'admin') update.artisteId = req.body.artisteId;
-    if (req.file) update.image = `${BASE_URL}/uploads/${req.file.filename}`;
-
+    if (req.file) update.image = `https://moozik-gft1.onrender.com/uploads/${req.file.filename}`;
     const updated = await Song.findByIdAndUpdate(req.params.id, update, { new: true });
     res.json(updated);
   } catch (err) { res.status(500).json(err); }
 });
 
-// LIKE / UNLIKE (public)
 app.put('/songs/:id/like', async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
@@ -356,10 +375,9 @@ app.put('/songs/:id/like', async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-// RÉORDONNER (admin)
 app.put('/songs/reorder', requireAdmin, async (req, res) => {
   try {
-    const { orderedIds } = req.body; // tableau d'ids dans le bon ordre
+    const { orderedIds } = req.body;
     for (let i = 0; i < orderedIds.length; i++) {
       await Song.findByIdAndUpdate(orderedIds[i], { ordre: i });
     }
@@ -367,7 +385,6 @@ app.put('/songs/reorder', requireAdmin, async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-// SEARCH (public)
 app.get('/search', async (req, res) => {
   try {
     const query = req.query.q;
@@ -382,9 +399,8 @@ app.get('/search', async (req, res) => {
 });
 
 // =====================
-// --- PLAYLISTS ---
+// --- PLAYLISTS ADMIN (publiques) ---
 // =====================
-
 app.get('/playlists', async (req, res) => {
   try {
     const playlists = await Playlist.find().populate('musiques');
@@ -427,25 +443,145 @@ app.delete('/playlists/:playlistId/remove/:songId', requireAdmin, async (req, re
 });
 
 // =====================
-// --- STATS ADMIN ---
+// --- USER PLAYLISTS (privées ou publiques) ---
 // =====================
 
+// Créer une playlist utilisateur
+app.post('/user-playlists', requireAuth, async (req, res) => {
+  try {
+    const { nom, isPublic } = req.body;
+    if (!nom) return res.status(400).json({ message: "Nom requis" });
+    const playlist = new UserPlaylist({
+      nom,
+      userId: req.user.id,
+      musiques: [],
+      isPublic: isPublic === true || isPublic === 'true'
+    });
+    await playlist.save();
+    res.json(playlist);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Mes playlists (seulement les miennes)
+app.get('/user-playlists/mine', requireAuth, async (req, res) => {
+  try {
+    const playlists = await UserPlaylist.find({ userId: req.user.id })
+      .populate('musiques')
+      .sort({ createdAt: -1 });
+    res.json(playlists);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Toutes les playlists publiques (visiteurs ou autres users)
+app.get('/user-playlists/public', async (req, res) => {
+  try {
+    const playlists = await UserPlaylist.find({ isPublic: true })
+      .populate('musiques')
+      .populate('userId', 'nom')
+      .sort({ createdAt: -1 });
+    res.json(playlists);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Voir une playlist par ID :
+// - Si publique → accessible sans auth
+// - Si privée → seulement son propriétaire ou un admin
+app.get('/user-playlists/:id', async (req, res) => {
+  try {
+    const playlist = await UserPlaylist.findById(req.params.id).populate('musiques');
+    if (!playlist) return res.status(404).json({ message: "Playlist introuvable" });
+
+    if (playlist.isPublic) return res.json(playlist);
+
+    // Playlist privée : vérifier le token
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(403).json({ message: "Cette playlist est privée" });
+
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const isOwner = String(playlist.userId) === String(decoded.id);
+      const isAdmin = decoded.role === 'admin';
+      if (!isOwner && !isAdmin) return res.status(403).json({ message: "Accès refusé" });
+      return res.json(playlist);
+    } catch {
+      return res.status(403).json({ message: "Token invalide" });
+    }
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Ajouter une musique à ma playlist
+app.post('/user-playlists/:id/add/:songId', requireAuth, async (req, res) => {
+  try {
+    const playlist = await UserPlaylist.findById(req.params.id);
+    if (!playlist) return res.status(404).json({ message: "Playlist introuvable" });
+    if (String(playlist.userId) !== String(req.user.id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Accès refusé" });
+    }
+    playlist.musiques.addToSet(req.params.songId);
+    await playlist.save();
+    res.json(playlist);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Retirer une musique de ma playlist
+app.delete('/user-playlists/:id/remove/:songId', requireAuth, async (req, res) => {
+  try {
+    const playlist = await UserPlaylist.findById(req.params.id);
+    if (!playlist) return res.status(404).json({ message: "Playlist introuvable" });
+    if (String(playlist.userId) !== String(req.user.id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Accès refusé" });
+    }
+    playlist.musiques = playlist.musiques.filter(id => String(id) !== req.params.songId);
+    await playlist.save();
+    res.json(playlist);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Changer visibilité (privée ↔ publique)
+app.put('/user-playlists/:id/visibility', requireAuth, async (req, res) => {
+  try {
+    const playlist = await UserPlaylist.findById(req.params.id);
+    if (!playlist) return res.status(404).json({ message: "Playlist introuvable" });
+    if (String(playlist.userId) !== String(req.user.id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Accès refusé" });
+    }
+    playlist.isPublic = req.body.isPublic;
+    await playlist.save();
+    res.json(playlist);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Supprimer ma playlist
+app.delete('/user-playlists/:id', requireAuth, async (req, res) => {
+  try {
+    const playlist = await UserPlaylist.findById(req.params.id);
+    if (!playlist) return res.status(404).json({ message: "Playlist introuvable" });
+    if (String(playlist.userId) !== String(req.user.id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Accès refusé" });
+    }
+    await UserPlaylist.findByIdAndDelete(req.params.id);
+    res.json({ message: "Playlist supprimée" });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// =====================
+// --- STATS ADMIN ---
+// =====================
 app.get('/admin/stats', requireAdmin, async (req, res) => {
   try {
     const totalSongs = await Song.countDocuments();
     const totalPlaylists = await Playlist.countDocuments();
     const totalArtists = await Artist.countDocuments();
+    const totalUsers = await User.countDocuments();
+    const totalUserPlaylists = await UserPlaylist.countDocuments();
     const totalPlays = await Song.aggregate([{ $group: { _id: null, total: { $sum: '$plays' } } }]);
     const totalLikes = await Song.countDocuments({ liked: true });
     const topSongs = await Song.find().sort({ plays: -1 }).limit(5).select('titre artiste plays image');
 
     res.json({
-      totalSongs,
-      totalPlaylists,
-      totalArtists,
+      totalSongs, totalPlaylists, totalArtists, totalUsers, totalUserPlaylists,
       totalPlays: totalPlays[0]?.total || 0,
-      totalLikes,
-      topSongs
+      totalLikes, topSongs
     });
   } catch (err) { res.status(500).json(err); }
 });
@@ -453,7 +589,6 @@ app.get('/admin/stats', requireAdmin, async (req, res) => {
 // =====================
 // --- SERVEUR ---
 // =====================
-
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Serveur en ligne sur le port ${PORT}`);
