@@ -42,10 +42,49 @@ const ArtistSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Artist = mongoose.model('Artist', ArtistSchema);
 
+// ── Album Schema ──
+const AlbumSchema = new mongoose.Schema({
+  titre: { type: String, required: true },
+  artisteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Artist', required: true },
+  artiste: { type: String, default: '' },
+  annee: { type: String, default: '' },
+  image: { type: String, default: '' },
+  ordre: { type: Number, default: 0 }
+}, { timestamps: true });
+const Album = mongoose.model('Album', AlbumSchema);
+
+// ── Comment & Reaction sub-schemas ──
+const ReponseSchema = new mongoose.Schema({
+  auteur: String,
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  texte: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const CommentSchema = new mongoose.Schema({
+  songId: { type: mongoose.Schema.Types.ObjectId, ref: 'Song', required: true },
+  auteur: String,
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  texte: { type: String, required: true },
+  likes: { type: Number, default: 0 },
+  likedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  reponses: [ReponseSchema]
+}, { timestamps: true });
+const Comment = mongoose.model('Comment', CommentSchema);
+
+const ReactionSchema = new mongoose.Schema({
+  songId: { type: mongoose.Schema.Types.ObjectId, ref: 'Song', required: true },
+  userId: { type: String, required: true }, // can be userId or session token
+  type: { type: String, enum: ['fire', 'heart', 'star'], required: true }
+}, { timestamps: true });
+ReactionSchema.index({ songId: 1, userId: 1 }, { unique: true });
+const Reaction = mongoose.model('Reaction', ReactionSchema);
+
 const SongSchema = new mongoose.Schema({
   titre: String,
   artiste: String,
   artisteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Artist', default: null },
+  albumId: { type: mongoose.Schema.Types.ObjectId, ref: 'Album', default: null },
   image: String,
   src: String,
   filename: String,
@@ -56,14 +95,12 @@ const SongSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Song = mongoose.model('Song', SongSchema);
 
-// Playlist Admin (publique par défaut, visible par tous)
 const PlaylistSchema = new mongoose.Schema({
   nom: String,
   musiques: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Song' }]
 }, { timestamps: true });
 const Playlist = mongoose.model('Playlist', PlaylistSchema);
 
-// Playlist Utilisateur (privée ou publique)
 const UserPlaylistSchema = new mongoose.Schema({
   nom: { type: String, required: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -78,7 +115,6 @@ const AdminSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Admin = mongoose.model('Admin', AdminSchema);
 
-// Utilisateur standard (peut créer des playlists, liker)
 const UserSchema = new mongoose.Schema({
   email: { type: String, unique: true, required: true },
   password: { type: String, required: true },
@@ -138,7 +174,6 @@ const requireAdminOrArtist = (req, res, next) => {
   } catch { return res.status(401).json({ message: "Token invalide" }); }
 };
 
-// Auth for any logged-in user (admin, artist, user)
 const requireAuth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ message: "Non autorisé" });
@@ -180,10 +215,8 @@ app.get('/admin/verify', requireAdmin, (req, res) => {
 });
 
 // =====================
-// --- AUTH UTILISATEUR STANDARD ---
+// --- AUTH USER ---
 // =====================
-
-// Inscription
 app.post('/users/register', async (req, res) => {
   try {
     const { email, password, nom } = req.body;
@@ -197,7 +230,6 @@ app.post('/users/register', async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Connexion
 app.post('/users/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -210,7 +242,6 @@ app.post('/users/login', async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Vérification token utilisateur
 app.get('/users/verify', requireAuth, (req, res) => {
   res.json({ valid: true, ...req.user });
 });
@@ -278,6 +309,270 @@ app.delete('/artists/:id', requireAdmin, async (req, res) => {
 });
 
 // =====================
+// --- ALBUMS ---
+// =====================
+
+// Créer un album (artiste ou admin)
+app.post('/albums', requireAdminOrArtist, upload.single('image'), async (req, res) => {
+  try {
+    const { titre, annee } = req.body;
+    let artisteId = req.body.artisteId;
+    let artisteName = '';
+
+    if (req.user.role === 'artist') {
+      artisteId = req.user.id;
+      artisteName = req.user.nom;
+    } else if (artisteId) {
+      const artist = await Artist.findById(artisteId);
+      if (artist) artisteName = artist.nom;
+    }
+
+    if (!artisteId) return res.status(400).json({ message: "artisteId requis" });
+
+    const BASE_URL = 'https://moozik-gft1.onrender.com';
+    const imageUrl = req.file
+      ? `${BASE_URL}/uploads/${req.file.filename}`
+      : `https://api.dicebear.com/7.x/shapes/svg?seed=album_${Date.now()}`;
+
+    const album = new Album({
+      titre,
+      artisteId,
+      artiste: artisteName,
+      annee: annee || new Date().getFullYear().toString(),
+      image: imageUrl
+    });
+    await album.save();
+    res.json(album);
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// Lister les albums (avec filtre optionnel par artiste)
+app.get('/albums', async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.artisteId) filter.artisteId = req.query.artisteId;
+    const albums = await Album.find(filter).sort({ annee: -1, createdAt: -1 });
+    res.json(albums);
+  } catch (err) { res.status(500).json(err); }
+});
+
+// Détail d'un album
+app.get('/albums/:id', async (req, res) => {
+  try {
+    const album = await Album.findById(req.params.id);
+    if (!album) return res.status(404).json({ message: "Album introuvable" });
+    res.json(album);
+  } catch (err) { res.status(500).json(err); }
+});
+
+// Mettre à jour un album
+app.put('/albums/:id', requireAdminOrArtist, upload.single('image'), async (req, res) => {
+  try {
+    const album = await Album.findById(req.params.id);
+    if (!album) return res.status(404).json({ message: "Album introuvable" });
+    if (req.user.role === 'artist' && String(album.artisteId) !== String(req.user.id)) {
+      return res.status(403).json({ message: "Accès refusé" });
+    }
+    const update = {};
+    if (req.body.titre) update.titre = req.body.titre;
+    if (req.body.annee) update.annee = req.body.annee;
+    if (req.file) update.image = `https://moozik-gft1.onrender.com/uploads/${req.file.filename}`;
+    const updated = await Album.findByIdAndUpdate(req.params.id, update, { new: true });
+    res.json(updated);
+  } catch (err) { res.status(500).json(err); }
+});
+
+// Supprimer un album
+app.delete('/albums/:id', requireAdminOrArtist, async (req, res) => {
+  try {
+    const album = await Album.findById(req.params.id);
+    if (!album) return res.status(404).json({ message: "Album introuvable" });
+    if (req.user.role === 'artist' && String(album.artisteId) !== String(req.user.id)) {
+      return res.status(403).json({ message: "Accès refusé" });
+    }
+    // Remove albumId from songs in this album
+    await Song.updateMany({ albumId: req.params.id }, { $unset: { albumId: '' } });
+    await Album.findByIdAndDelete(req.params.id);
+    res.json({ message: "Album supprimé" });
+  } catch (err) { res.status(500).json(err); }
+});
+
+// Ajouter une musique à un album
+app.post('/albums/:id/add/:songId', requireAdminOrArtist, async (req, res) => {
+  try {
+    const album = await Album.findById(req.params.id);
+    if (!album) return res.status(404).json({ message: "Album introuvable" });
+    if (req.user.role === 'artist' && String(album.artisteId) !== String(req.user.id)) {
+      return res.status(403).json({ message: "Accès refusé" });
+    }
+    const song = await Song.findByIdAndUpdate(req.params.songId, { albumId: req.params.id }, { new: true });
+    res.json(song);
+  } catch (err) { res.status(500).json(err); }
+});
+
+// Retirer une musique d'un album
+app.delete('/albums/:id/remove/:songId', requireAdminOrArtist, async (req, res) => {
+  try {
+    const album = await Album.findById(req.params.id);
+    if (!album) return res.status(404).json({ message: "Album introuvable" });
+    if (req.user.role === 'artist' && String(album.artisteId) !== String(req.user.id)) {
+      return res.status(403).json({ message: "Accès refusé" });
+    }
+    await Song.findByIdAndUpdate(req.params.songId, { $unset: { albumId: '' } });
+    res.json({ message: "Musique retirée de l'album" });
+  } catch (err) { res.status(500).json(err); }
+});
+
+// =====================
+// --- COMMENTS ---
+// =====================
+
+// Lire les commentaires d'une musique
+app.get('/songs/:id/comments', async (req, res) => {
+  try {
+    const comments = await Comment.find({ songId: req.params.id })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    // Add likedByMe field if user is authenticated
+    const token = req.headers.authorization?.split(' ')[1];
+    let userId = null;
+    if (token) {
+      try { userId = jwt.verify(token, process.env.JWT_SECRET).id; } catch {}
+    }
+
+    const result = comments.map(c => ({
+      ...c.toObject(),
+      likedByMe: userId ? c.likedBy.some(id => String(id) === String(userId)) : false
+    }));
+
+    res.json(result);
+  } catch (err) { res.status(500).json(err); }
+});
+
+// Poster un commentaire (authentifié requis)
+app.post('/songs/:id/comments', requireAuth, async (req, res) => {
+  try {
+    const { texte, auteur } = req.body;
+    if (!texte?.trim()) return res.status(400).json({ message: "Texte requis" });
+    const comment = new Comment({
+      songId: req.params.id,
+      texte: texte.trim(),
+      auteur: auteur || req.user.nom || req.user.email,
+      userId: req.user.id
+    });
+    await comment.save();
+    res.json(comment);
+  } catch (err) { res.status(500).json(err); }
+});
+
+// Liker un commentaire
+app.put('/songs/:songId/comments/:commentId/like', requireAuth, async (req, res) => {
+  try {
+    const comment = await Comment.findById(req.params.commentId);
+    if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
+
+    const userId = req.user.id;
+    const alreadyLiked = comment.likedBy.some(id => String(id) === String(userId));
+
+    if (alreadyLiked) {
+      comment.likedBy = comment.likedBy.filter(id => String(id) !== String(userId));
+      comment.likes = Math.max(0, comment.likes - 1);
+    } else {
+      comment.likedBy.push(userId);
+      comment.likes += 1;
+    }
+    await comment.save();
+    res.json({ ...comment.toObject(), likedByMe: !alreadyLiked });
+  } catch (err) { res.status(500).json(err); }
+});
+
+// Répondre à un commentaire
+app.post('/songs/:songId/comments/:commentId/reply', requireAuth, async (req, res) => {
+  try {
+    const { texte, auteur } = req.body;
+    if (!texte?.trim()) return res.status(400).json({ message: "Texte requis" });
+    const comment = await Comment.findById(req.params.commentId);
+    if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
+
+    comment.reponses.push({
+      texte: texte.trim(),
+      auteur: auteur || req.user.nom || req.user.email,
+      userId: req.user.id
+    });
+    await comment.save();
+    res.json(comment);
+  } catch (err) { res.status(500).json(err); }
+});
+
+// Supprimer un commentaire (auteur ou admin)
+app.delete('/songs/:songId/comments/:commentId', requireAuth, async (req, res) => {
+  try {
+    const comment = await Comment.findById(req.params.commentId);
+    if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
+    const isOwner = String(comment.userId) === String(req.user.id);
+    const isAdmin = req.user.role === 'admin';
+    if (!isOwner && !isAdmin) return res.status(403).json({ message: "Accès refusé" });
+    await Comment.findByIdAndDelete(req.params.commentId);
+    res.json({ message: "Commentaire supprimé" });
+  } catch (err) { res.status(500).json(err); }
+});
+
+// =====================
+// --- REACTIONS ---
+// =====================
+
+// Lire les réactions d'une musique
+app.get('/songs/:id/reactions', async (req, res) => {
+  try {
+    const reactions = await Reaction.find({ songId: req.params.id });
+    const counts = { fire: 0, heart: 0, star: 0 };
+    reactions.forEach(r => { if (counts[r.type] !== undefined) counts[r.type]++; });
+
+    const token = req.headers.authorization?.split(' ')[1];
+    let userReaction = null;
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const mine = reactions.find(r => String(r.userId) === String(decoded.id));
+        if (mine) userReaction = mine.type;
+      } catch {}
+    }
+    res.json({ ...counts, userReaction });
+  } catch (err) { res.status(500).json(err); }
+});
+
+// Ajouter / modifier / retirer une réaction
+app.post('/songs/:id/reactions', requireAuth, async (req, res) => {
+  try {
+    const { type } = req.body;
+    if (!['fire', 'heart', 'star'].includes(type)) return res.status(400).json({ message: "Type invalide" });
+
+    const existing = await Reaction.findOne({ songId: req.params.id, userId: req.user.id });
+
+    if (existing) {
+      if (existing.type === type) {
+        // Toggle off (remove reaction)
+        await Reaction.deleteOne({ _id: existing._id });
+      } else {
+        // Change reaction type
+        existing.type = type;
+        await existing.save();
+      }
+    } else {
+      await new Reaction({ songId: req.params.id, userId: req.user.id, type }).save();
+    }
+
+    // Return updated counts
+    const reactions = await Reaction.find({ songId: req.params.id });
+    const counts = { fire: 0, heart: 0, star: 0 };
+    reactions.forEach(r => { if (counts[r.type] !== undefined) counts[r.type]++; });
+    const mine = reactions.find(r => String(r.userId) === String(req.user.id));
+    res.json({ ...counts, userReaction: mine ? mine.type : null });
+  } catch (err) { res.status(500).json(err); }
+});
+
+// =====================
 // --- ROUTES SONGS ---
 // =====================
 app.get('/songs', async (req, res) => {
@@ -316,6 +611,7 @@ app.post('/upload', requireAdminOrArtist, upload.fields([
       titre: req.body.titre || audioFile.originalname.replace('.mp3', '').replace(/_/g, ' '),
       artiste: artisteName,
       artisteId: artisteId || null,
+      albumId: req.body.albumId || null,
       src: `${BASE_URL}/uploads/${audioFile.filename}`,
       image: imageUrl,
       filename: audioFile.filename,
@@ -343,6 +639,9 @@ app.delete('/songs/:id', requireAdminOrArtist, async (req, res) => {
     }
     const filePath = path.join(__dirname, 'uploads', song.filename);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    // Also clean up comments and reactions
+    await Comment.deleteMany({ songId: req.params.id });
+    await Reaction.deleteMany({ songId: req.params.id });
     await Song.findByIdAndDelete(req.params.id);
     res.json({ message: "Supprimé avec succès" });
   } catch (err) { res.status(500).json(err); }
@@ -359,6 +658,7 @@ app.put('/songs/:id', requireAdminOrArtist, upload.single('image'), async (req, 
     if (req.body.titre) update.titre = req.body.titre;
     if (req.body.artiste && req.user.role === 'admin') update.artiste = req.body.artiste;
     if (req.body.artisteId && req.user.role === 'admin') update.artisteId = req.body.artisteId;
+    if (req.body.albumId !== undefined) update.albumId = req.body.albumId || null;
     if (req.file) update.image = `https://moozik-gft1.onrender.com/uploads/${req.file.filename}`;
     const updated = await Song.findByIdAndUpdate(req.params.id, update, { new: true });
     res.json(updated);
@@ -399,7 +699,7 @@ app.get('/search', async (req, res) => {
 });
 
 // =====================
-// --- PLAYLISTS ADMIN (publiques) ---
+// --- PLAYLISTS ADMIN ---
 // =====================
 app.get('/playlists', async (req, res) => {
   try {
@@ -443,18 +743,14 @@ app.delete('/playlists/:playlistId/remove/:songId', requireAdmin, async (req, re
 });
 
 // =====================
-// --- USER PLAYLISTS (privées ou publiques) ---
+// --- USER PLAYLISTS ---
 // =====================
-
-// Créer une playlist utilisateur
 app.post('/user-playlists', requireAuth, async (req, res) => {
   try {
     const { nom, isPublic } = req.body;
     if (!nom) return res.status(400).json({ message: "Nom requis" });
     const playlist = new UserPlaylist({
-      nom,
-      userId: req.user.id,
-      musiques: [],
+      nom, userId: req.user.id, musiques: [],
       isPublic: isPublic === true || isPublic === 'true'
     });
     await playlist.save();
@@ -462,54 +758,37 @@ app.post('/user-playlists', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Mes playlists (seulement les miennes)
 app.get('/user-playlists/mine', requireAuth, async (req, res) => {
   try {
-    const playlists = await UserPlaylist.find({ userId: req.user.id })
-      .populate('musiques')
-      .sort({ createdAt: -1 });
+    const playlists = await UserPlaylist.find({ userId: req.user.id }).populate('musiques').sort({ createdAt: -1 });
     res.json(playlists);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Toutes les playlists publiques (visiteurs ou autres users)
 app.get('/user-playlists/public', async (req, res) => {
   try {
-    const playlists = await UserPlaylist.find({ isPublic: true })
-      .populate('musiques')
-      .populate('userId', 'nom')
-      .sort({ createdAt: -1 });
+    const playlists = await UserPlaylist.find({ isPublic: true }).populate('musiques').populate('userId', 'nom').sort({ createdAt: -1 });
     res.json(playlists);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Voir une playlist par ID :
-// - Si publique → accessible sans auth
-// - Si privée → seulement son propriétaire ou un admin
 app.get('/user-playlists/:id', async (req, res) => {
   try {
     const playlist = await UserPlaylist.findById(req.params.id).populate('musiques');
     if (!playlist) return res.status(404).json({ message: "Playlist introuvable" });
-
     if (playlist.isPublic) return res.json(playlist);
-
-    // Playlist privée : vérifier le token
     const token = req.headers.authorization?.split(' ')[1];
     if (!token) return res.status(403).json({ message: "Cette playlist est privée" });
-
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const isOwner = String(playlist.userId) === String(decoded.id);
       const isAdmin = decoded.role === 'admin';
       if (!isOwner && !isAdmin) return res.status(403).json({ message: "Accès refusé" });
       return res.json(playlist);
-    } catch {
-      return res.status(403).json({ message: "Token invalide" });
-    }
+    } catch { return res.status(403).json({ message: "Token invalide" }); }
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Ajouter une musique à ma playlist
 app.post('/user-playlists/:id/add/:songId', requireAuth, async (req, res) => {
   try {
     const playlist = await UserPlaylist.findById(req.params.id);
@@ -523,7 +802,6 @@ app.post('/user-playlists/:id/add/:songId', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Retirer une musique de ma playlist
 app.delete('/user-playlists/:id/remove/:songId', requireAuth, async (req, res) => {
   try {
     const playlist = await UserPlaylist.findById(req.params.id);
@@ -537,7 +815,6 @@ app.delete('/user-playlists/:id/remove/:songId', requireAuth, async (req, res) =
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Changer visibilité (privée ↔ publique)
 app.put('/user-playlists/:id/visibility', requireAuth, async (req, res) => {
   try {
     const playlist = await UserPlaylist.findById(req.params.id);
@@ -551,7 +828,6 @@ app.put('/user-playlists/:id/visibility', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Supprimer ma playlist
 app.delete('/user-playlists/:id', requireAuth, async (req, res) => {
   try {
     const playlist = await UserPlaylist.findById(req.params.id);
@@ -572,14 +848,17 @@ app.get('/admin/stats', requireAdmin, async (req, res) => {
     const totalSongs = await Song.countDocuments();
     const totalPlaylists = await Playlist.countDocuments();
     const totalArtists = await Artist.countDocuments();
+    const totalAlbums = await Album.countDocuments();
     const totalUsers = await User.countDocuments();
     const totalUserPlaylists = await UserPlaylist.countDocuments();
+    const totalComments = await Comment.countDocuments();
     const totalPlays = await Song.aggregate([{ $group: { _id: null, total: { $sum: '$plays' } } }]);
     const totalLikes = await Song.countDocuments({ liked: true });
     const topSongs = await Song.find().sort({ plays: -1 }).limit(5).select('titre artiste plays image');
 
     res.json({
-      totalSongs, totalPlaylists, totalArtists, totalUsers, totalUserPlaylists,
+      totalSongs, totalPlaylists, totalArtists, totalAlbums, totalUsers,
+      totalUserPlaylists, totalComments,
       totalPlays: totalPlays[0]?.total || 0,
       totalLikes, topSongs
     });
