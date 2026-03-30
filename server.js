@@ -3,10 +3,11 @@ require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { v2: cloudinary } = require('cloudinary');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
 
@@ -20,13 +21,74 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-if (!fs.existsSync('./uploads')) fs.mkdirSync('./uploads');
 
 // --- MONGODB ---
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("✅ Connecté à MongoDB Atlas"))
   .catch(err => console.error("❌ Erreur MongoDB :", err));
+
+// =====================
+// --- CLOUDINARY CONFIG ---
+// =====================
+// Ajouter dans votre .env :
+//   CLOUDINARY_CLOUD_NAME=your_cloud_name
+//   CLOUDINARY_API_KEY=your_api_key
+//   CLOUDINARY_API_SECRET=your_api_secret
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// =====================
+// --- MULTER STORAGES ---
+// =====================
+
+// Storage Cloudinary pour les images (pochettes, photos artistes/albums)
+const imageStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'moozik/images',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
+    transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }],
+  },
+});
+
+// Upload image seule (routes artiste, album)
+const uploadImage = multer({
+  storage: imageStorage,
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    allowed.includes(file.mimetype) ? cb(null, true) : cb(new Error("Type d'image non supporté"));
+  },
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
+
+// Pour /upload : on bufferise en RAM puis on envoie manuellement à Cloudinary
+// (nécessaire pour uploader audio ET image en même temps avec des resource_type différents)
+const uploadMixed = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: (req, file, cb) => {
+    const allowed = ['audio/mpeg', 'audio/mp3', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    allowed.includes(file.mimetype) ? cb(null, true) : cb(new Error("Type de fichier non supporté"));
+  },
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
+
+// Helper : uploader un Buffer vers Cloudinary
+const uploadBuffer = (buffer, options) =>
+  new Promise((resolve, reject) => {
+    cloudinary.uploader.upload_stream(options, (err, result) => {
+      if (err) reject(err); else resolve(result);
+    }).end(buffer);
+  });
+
+// Helper : supprimer un asset Cloudinary
+const destroyCloudinary = async (publicId, resourceType = 'image') => {
+  if (!publicId) return;
+  try { await cloudinary.uploader.destroy(publicId, { resource_type: resourceType }); }
+  catch (e) { console.warn('Cloudinary destroy warning:', e.message); }
+};
 
 // =====================
 // --- SCHEMAS ---
@@ -36,24 +98,24 @@ const ArtistSchema = new mongoose.Schema({
   nom: { type: String, required: true },
   bio: { type: String, default: '' },
   image: { type: String, default: '' },
+  imagePublicId: { type: String, default: '' },
   email: { type: String, unique: true, sparse: true },
   password: { type: String },
   role: { type: String, default: 'artist' }
 }, { timestamps: true });
 const Artist = mongoose.model('Artist', ArtistSchema);
 
-// ── Album Schema ──
 const AlbumSchema = new mongoose.Schema({
   titre: { type: String, required: true },
   artisteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Artist', required: true },
   artiste: { type: String, default: '' },
   annee: { type: String, default: '' },
   image: { type: String, default: '' },
+  imagePublicId: { type: String, default: '' },
   ordre: { type: Number, default: 0 }
 }, { timestamps: true });
 const Album = mongoose.model('Album', AlbumSchema);
 
-// ── Comment & Reaction sub-schemas ──
 const ReponseSchema = new mongoose.Schema({
   auteur: String,
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
@@ -74,7 +136,7 @@ const Comment = mongoose.model('Comment', CommentSchema);
 
 const ReactionSchema = new mongoose.Schema({
   songId: { type: mongoose.Schema.Types.ObjectId, ref: 'Song', required: true },
-  userId: { type: String, required: true }, // can be userId or session token
+  userId: { type: String, required: true },
   type: { type: String, enum: ['fire', 'heart', 'star'], required: true }
 }, { timestamps: true });
 ReactionSchema.index({ songId: 1, userId: 1 }, { unique: true });
@@ -86,9 +148,9 @@ const SongSchema = new mongoose.Schema({
   artisteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Artist', default: null },
   albumId: { type: mongoose.Schema.Types.ObjectId, ref: 'Album', default: null },
   image: String,
+  imagePublicId: { type: String, default: '' },
   src: String,
-  filename: String,
-  audioFilename: String,
+  audioPublicId: { type: String, default: '' }, // public_id Cloudinary (resource_type: video)
   liked: { type: Boolean, default: false },
   plays: { type: Number, default: 0 },
   ordre: { type: Number, default: 0 }
@@ -122,24 +184,6 @@ const UserSchema = new mongoose.Schema({
   role: { type: String, default: 'user' }
 }, { timestamps: true });
 const User = mongoose.model('User', UserSchema);
-
-// =====================
-// --- MULTER ---
-// =====================
-const storage = multer.diskStorage({
-  destination: './uploads',
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + '-' + file.originalname.replace(/\s+/g, '_'));
-  }
-});
-const upload = multer({
-  storage,
-  fileFilter: (req, file, cb) => {
-    const allowed = ['audio/mpeg', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    if (allowed.includes(file.mimetype)) cb(null, true);
-    else cb(new Error("Type de fichier non supporté"));
-  }
-});
 
 // =====================
 // --- MIDDLEWARES JWT ---
@@ -291,11 +335,18 @@ app.get('/artists/:id', async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-app.put('/artists/:id', requireAdmin, upload.single('image'), async (req, res) => {
+app.put('/artists/:id', requireAdmin, uploadImage.single('image'), async (req, res) => {
   try {
     const { nom, bio } = req.body;
-    const update = { nom, bio };
-    if (req.file) update.image = `https://moozik-gft1.onrender.com/uploads/${req.file.filename}`;
+    const update = {};
+    if (nom) update.nom = nom;
+    if (bio !== undefined) update.bio = bio;
+    if (req.file) {
+      const oldArtist = await Artist.findById(req.params.id);
+      await destroyCloudinary(oldArtist?.imagePublicId);
+      update.image = req.file.path;
+      update.imagePublicId = req.file.filename;
+    }
     const artist = await Artist.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
     res.json(artist);
   } catch (err) { res.status(500).json(err); }
@@ -303,6 +354,8 @@ app.put('/artists/:id', requireAdmin, upload.single('image'), async (req, res) =
 
 app.delete('/artists/:id', requireAdmin, async (req, res) => {
   try {
+    const artist = await Artist.findById(req.params.id);
+    await destroyCloudinary(artist?.imagePublicId);
     await Artist.findByIdAndDelete(req.params.id);
     res.json({ message: "Artiste supprimé" });
   } catch (err) { res.status(500).json(err); }
@@ -311,14 +364,11 @@ app.delete('/artists/:id', requireAdmin, async (req, res) => {
 // =====================
 // --- ALBUMS ---
 // =====================
-
-// Créer un album (artiste ou admin)
-app.post('/albums', requireAdminOrArtist, upload.single('image'), async (req, res) => {
+app.post('/albums', requireAdminOrArtist, uploadImage.single('image'), async (req, res) => {
   try {
     const { titre, annee } = req.body;
     let artisteId = req.body.artisteId;
     let artisteName = '';
-
     if (req.user.role === 'artist') {
       artisteId = req.user.id;
       artisteName = req.user.nom;
@@ -326,27 +376,21 @@ app.post('/albums', requireAdminOrArtist, upload.single('image'), async (req, re
       const artist = await Artist.findById(artisteId);
       if (artist) artisteName = artist.nom;
     }
-
     if (!artisteId) return res.status(400).json({ message: "artisteId requis" });
 
-    const BASE_URL = 'https://moozik-gft1.onrender.com';
-    const imageUrl = req.file
-      ? `${BASE_URL}/uploads/${req.file.filename}`
-      : `https://api.dicebear.com/7.x/shapes/svg?seed=album_${Date.now()}`;
+    const imageUrl = req.file ? req.file.path : `https://api.dicebear.com/7.x/shapes/svg?seed=album_${Date.now()}`;
+    const imagePublicId = req.file ? req.file.filename : '';
 
     const album = new Album({
-      titre,
-      artisteId,
-      artiste: artisteName,
+      titre, artisteId, artiste: artisteName,
       annee: annee || new Date().getFullYear().toString(),
-      image: imageUrl
+      image: imageUrl, imagePublicId
     });
     await album.save();
     res.json(album);
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-// Lister les albums (avec filtre optionnel par artiste)
 app.get('/albums', async (req, res) => {
   try {
     const filter = {};
@@ -356,7 +400,6 @@ app.get('/albums', async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-// Détail d'un album
 app.get('/albums/:id', async (req, res) => {
   try {
     const album = await Album.findById(req.params.id);
@@ -365,8 +408,7 @@ app.get('/albums/:id', async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-// Mettre à jour un album
-app.put('/albums/:id', requireAdminOrArtist, upload.single('image'), async (req, res) => {
+app.put('/albums/:id', requireAdminOrArtist, uploadImage.single('image'), async (req, res) => {
   try {
     const album = await Album.findById(req.params.id);
     if (!album) return res.status(404).json({ message: "Album introuvable" });
@@ -376,13 +418,16 @@ app.put('/albums/:id', requireAdminOrArtist, upload.single('image'), async (req,
     const update = {};
     if (req.body.titre) update.titre = req.body.titre;
     if (req.body.annee) update.annee = req.body.annee;
-    if (req.file) update.image = `https://moozik-gft1.onrender.com/uploads/${req.file.filename}`;
+    if (req.file) {
+      await destroyCloudinary(album.imagePublicId);
+      update.image = req.file.path;
+      update.imagePublicId = req.file.filename;
+    }
     const updated = await Album.findByIdAndUpdate(req.params.id, update, { new: true });
     res.json(updated);
   } catch (err) { res.status(500).json(err); }
 });
 
-// Supprimer un album
 app.delete('/albums/:id', requireAdminOrArtist, async (req, res) => {
   try {
     const album = await Album.findById(req.params.id);
@@ -390,14 +435,13 @@ app.delete('/albums/:id', requireAdminOrArtist, async (req, res) => {
     if (req.user.role === 'artist' && String(album.artisteId) !== String(req.user.id)) {
       return res.status(403).json({ message: "Accès refusé" });
     }
-    // Remove albumId from songs in this album
+    await destroyCloudinary(album.imagePublicId);
     await Song.updateMany({ albumId: req.params.id }, { $unset: { albumId: '' } });
     await Album.findByIdAndDelete(req.params.id);
     res.json({ message: "Album supprimé" });
   } catch (err) { res.status(500).json(err); }
 });
 
-// Ajouter une musique à un album
 app.post('/albums/:id/add/:songId', requireAdminOrArtist, async (req, res) => {
   try {
     const album = await Album.findById(req.params.id);
@@ -410,7 +454,6 @@ app.post('/albums/:id/add/:songId', requireAdminOrArtist, async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-// Retirer une musique d'un album
 app.delete('/albums/:id/remove/:songId', requireAdminOrArtist, async (req, res) => {
   try {
     const album = await Album.findById(req.params.id);
@@ -426,55 +469,39 @@ app.delete('/albums/:id/remove/:songId', requireAdminOrArtist, async (req, res) 
 // =====================
 // --- COMMENTS ---
 // =====================
-
-// Lire les commentaires d'une musique
 app.get('/songs/:id/comments', async (req, res) => {
   try {
-    const comments = await Comment.find({ songId: req.params.id })
-      .sort({ createdAt: -1 })
-      .limit(50);
-
-    // Add likedByMe field if user is authenticated
+    const comments = await Comment.find({ songId: req.params.id }).sort({ createdAt: -1 }).limit(50);
     const token = req.headers.authorization?.split(' ')[1];
     let userId = null;
-    if (token) {
-      try { userId = jwt.verify(token, process.env.JWT_SECRET).id; } catch {}
-    }
-
+    if (token) { try { userId = jwt.verify(token, process.env.JWT_SECRET).id; } catch {} }
     const result = comments.map(c => ({
       ...c.toObject(),
       likedByMe: userId ? c.likedBy.some(id => String(id) === String(userId)) : false
     }));
-
     res.json(result);
   } catch (err) { res.status(500).json(err); }
 });
 
-// Poster un commentaire (authentifié requis)
 app.post('/songs/:id/comments', requireAuth, async (req, res) => {
   try {
     const { texte, auteur } = req.body;
     if (!texte?.trim()) return res.status(400).json({ message: "Texte requis" });
     const comment = new Comment({
-      songId: req.params.id,
-      texte: texte.trim(),
-      auteur: auteur || req.user.nom || req.user.email,
-      userId: req.user.id
+      songId: req.params.id, texte: texte.trim(),
+      auteur: auteur || req.user.nom || req.user.email, userId: req.user.id
     });
     await comment.save();
     res.json(comment);
   } catch (err) { res.status(500).json(err); }
 });
 
-// Liker un commentaire
 app.put('/songs/:songId/comments/:commentId/like', requireAuth, async (req, res) => {
   try {
     const comment = await Comment.findById(req.params.commentId);
     if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
-
     const userId = req.user.id;
     const alreadyLiked = comment.likedBy.some(id => String(id) === String(userId));
-
     if (alreadyLiked) {
       comment.likedBy = comment.likedBy.filter(id => String(id) !== String(userId));
       comment.likes = Math.max(0, comment.likes - 1);
@@ -487,32 +514,25 @@ app.put('/songs/:songId/comments/:commentId/like', requireAuth, async (req, res)
   } catch (err) { res.status(500).json(err); }
 });
 
-// Répondre à un commentaire
 app.post('/songs/:songId/comments/:commentId/reply', requireAuth, async (req, res) => {
   try {
     const { texte, auteur } = req.body;
     if (!texte?.trim()) return res.status(400).json({ message: "Texte requis" });
     const comment = await Comment.findById(req.params.commentId);
     if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
-
-    comment.reponses.push({
-      texte: texte.trim(),
-      auteur: auteur || req.user.nom || req.user.email,
-      userId: req.user.id
-    });
+    comment.reponses.push({ texte: texte.trim(), auteur: auteur || req.user.nom || req.user.email, userId: req.user.id });
     await comment.save();
     res.json(comment);
   } catch (err) { res.status(500).json(err); }
 });
 
-// Supprimer un commentaire (auteur ou admin)
 app.delete('/songs/:songId/comments/:commentId', requireAuth, async (req, res) => {
   try {
     const comment = await Comment.findById(req.params.commentId);
     if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
-    const isOwner = String(comment.userId) === String(req.user.id);
-    const isAdmin = req.user.role === 'admin';
-    if (!isOwner && !isAdmin) return res.status(403).json({ message: "Accès refusé" });
+    if (String(comment.userId) !== String(req.user.id) && req.user.role !== 'admin') {
+      return res.status(403).json({ message: "Accès refusé" });
+    }
     await Comment.findByIdAndDelete(req.params.commentId);
     res.json({ message: "Commentaire supprimé" });
   } catch (err) { res.status(500).json(err); }
@@ -521,14 +541,11 @@ app.delete('/songs/:songId/comments/:commentId', requireAuth, async (req, res) =
 // =====================
 // --- REACTIONS ---
 // =====================
-
-// Lire les réactions d'une musique
 app.get('/songs/:id/reactions', async (req, res) => {
   try {
     const reactions = await Reaction.find({ songId: req.params.id });
     const counts = { fire: 0, heart: 0, star: 0 };
     reactions.forEach(r => { if (counts[r.type] !== undefined) counts[r.type]++; });
-
     const token = req.headers.authorization?.split(' ')[1];
     let userReaction = null;
     if (token) {
@@ -542,28 +559,17 @@ app.get('/songs/:id/reactions', async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-// Ajouter / modifier / retirer une réaction
 app.post('/songs/:id/reactions', requireAuth, async (req, res) => {
   try {
     const { type } = req.body;
     if (!['fire', 'heart', 'star'].includes(type)) return res.status(400).json({ message: "Type invalide" });
-
     const existing = await Reaction.findOne({ songId: req.params.id, userId: req.user.id });
-
     if (existing) {
-      if (existing.type === type) {
-        // Toggle off (remove reaction)
-        await Reaction.deleteOne({ _id: existing._id });
-      } else {
-        // Change reaction type
-        existing.type = type;
-        await existing.save();
-      }
+      if (existing.type === type) await Reaction.deleteOne({ _id: existing._id });
+      else { existing.type = type; await existing.save(); }
     } else {
       await new Reaction({ songId: req.params.id, userId: req.user.id, type }).save();
     }
-
-    // Return updated counts
     const reactions = await Reaction.find({ songId: req.params.id });
     const counts = { fire: 0, heart: 0, star: 0 };
     reactions.forEach(r => { if (counts[r.type] !== undefined) counts[r.type]++; });
@@ -582,19 +588,21 @@ app.get('/songs', async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-app.post('/upload', requireAdminOrArtist, upload.fields([
+// POST /upload — audio + image → Cloudinary via buffer
+app.post('/upload', requireAdminOrArtist, uploadMixed.fields([
   { name: 'audio', maxCount: 1 },
   { name: 'image', maxCount: 1 }
 ]), async (req, res) => {
   try {
-    const BASE_URL = 'https://moozik-gft1.onrender.com';
-    const audioFile = req.files['audio']?.[0];
-    const imageFile = req.files['image']?.[0];
-    if (!audioFile) return res.status(400).json({ message: "Fichier audio manquant" });
+    const audioBuffer = req.files['audio']?.[0]?.buffer;
+    const imageBuffer = req.files['image']?.[0]?.buffer;
+    const originalName = req.files['audio']?.[0]?.originalname || 'track.mp3';
+
+    if (!audioBuffer) return res.status(400).json({ message: "Fichier audio manquant" });
 
     const isArtist = req.user.role === 'artist';
     const artisteId = isArtist ? req.user.id : (req.body.artisteId || null);
-    let artisteName = req.body.artiste || "Artiste Local";
+    let artisteName = "Artiste Local";
     if (isArtist) {
       artisteName = req.user.nom;
     } else if (artisteId) {
@@ -602,25 +610,46 @@ app.post('/upload', requireAdminOrArtist, upload.fields([
       if (artist) artisteName = artist.nom;
     }
 
-    const imageUrl = imageFile
-      ? `${BASE_URL}/uploads/${imageFile.filename}`
-      : `https://api.dicebear.com/7.x/shapes/svg?seed=${audioFile.filename}`;
+    // 1. Upload audio vers Cloudinary (resource_type: 'video' = audio aussi)
+    const audioResult = await uploadBuffer(audioBuffer, {
+      resource_type: 'video',
+      folder: 'moozik/audio',
+      public_id: `audio_${Date.now()}`,
+      format: 'mp3',
+    });
+
+    // 2. Upload image (ou fallback dicebear)
+    let imageUrl = `https://api.dicebear.com/7.x/shapes/svg?seed=${audioResult.public_id}`;
+    let imagePublicId = '';
+    if (imageBuffer) {
+      const imgResult = await uploadBuffer(imageBuffer, {
+        resource_type: 'image',
+        folder: 'moozik/images',
+        public_id: `img_${Date.now()}`,
+        transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }],
+      });
+      imageUrl = imgResult.secure_url;
+      imagePublicId = imgResult.public_id;
+    }
 
     const count = await Song.countDocuments();
     const newSong = new Song({
-      titre: req.body.titre || audioFile.originalname.replace('.mp3', '').replace(/_/g, ' '),
+      titre: req.body.titre || originalName.replace(/\.(mp3|mpeg)$/i, '').replace(/_/g, ' '),
       artiste: artisteName,
       artisteId: artisteId || null,
       albumId: req.body.albumId || null,
-      src: `${BASE_URL}/uploads/${audioFile.filename}`,
+      src: audioResult.secure_url,        // ← URL Cloudinary directe, pas /uploads/
+      audioPublicId: audioResult.public_id,
       image: imageUrl,
-      filename: audioFile.filename,
-      audioFilename: audioFile.filename,
+      imagePublicId,
       ordre: count
     });
     await newSong.save();
     res.json(newSong);
-  } catch (err) { res.status(500).json(err); }
+  } catch (err) {
+    console.error('Upload error:', err);
+    res.status(500).json({ message: err.message });
+  }
 });
 
 app.put('/songs/:id/play', async (req, res) => {
@@ -637,9 +666,10 @@ app.delete('/songs/:id', requireAdminOrArtist, async (req, res) => {
     if (req.user.role === 'artist' && String(song.artisteId) !== String(req.user.id)) {
       return res.status(403).json({ message: "Vous ne pouvez supprimer que vos propres musiques" });
     }
-    const filePath = path.join(__dirname, 'uploads', song.filename);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    // Also clean up comments and reactions
+    // Supprimer les fichiers sur Cloudinary
+    await destroyCloudinary(song.audioPublicId, 'video');
+    await destroyCloudinary(song.imagePublicId, 'image');
+    // Nettoyer commentaires et réactions
     await Comment.deleteMany({ songId: req.params.id });
     await Reaction.deleteMany({ songId: req.params.id });
     await Song.findByIdAndDelete(req.params.id);
@@ -647,7 +677,7 @@ app.delete('/songs/:id', requireAdminOrArtist, async (req, res) => {
   } catch (err) { res.status(500).json(err); }
 });
 
-app.put('/songs/:id', requireAdminOrArtist, upload.single('image'), async (req, res) => {
+app.put('/songs/:id', requireAdminOrArtist, uploadImage.single('image'), async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
     if (!song) return res.status(404).send("Introuvable");
@@ -659,7 +689,11 @@ app.put('/songs/:id', requireAdminOrArtist, upload.single('image'), async (req, 
     if (req.body.artiste && req.user.role === 'admin') update.artiste = req.body.artiste;
     if (req.body.artisteId && req.user.role === 'admin') update.artisteId = req.body.artisteId;
     if (req.body.albumId !== undefined) update.albumId = req.body.albumId || null;
-    if (req.file) update.image = `https://moozik-gft1.onrender.com/uploads/${req.file.filename}`;
+    if (req.file) {
+      await destroyCloudinary(song.imagePublicId);
+      update.image = req.file.path;
+      update.imagePublicId = req.file.filename;
+    }
     const updated = await Song.findByIdAndUpdate(req.params.id, update, { new: true });
     res.json(updated);
   } catch (err) { res.status(500).json(err); }
@@ -782,8 +816,8 @@ app.get('/user-playlists/:id', async (req, res) => {
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       const isOwner = String(playlist.userId) === String(decoded.id);
-      const isAdmin = decoded.role === 'admin';
-      if (!isOwner && !isAdmin) return res.status(403).json({ message: "Accès refusé" });
+      const isAdminUser = decoded.role === 'admin';
+      if (!isOwner && !isAdminUser) return res.status(403).json({ message: "Accès refusé" });
       return res.json(playlist);
     } catch { return res.status(403).json({ message: "Token invalide" }); }
   } catch (err) { res.status(500).json({ message: err.message }); }
@@ -855,7 +889,6 @@ app.get('/admin/stats', requireAdmin, async (req, res) => {
     const totalPlays = await Song.aggregate([{ $group: { _id: null, total: { $sum: '$plays' } } }]);
     const totalLikes = await Song.countDocuments({ liked: true });
     const topSongs = await Song.find().sort({ plays: -1 }).limit(5).select('titre artiste plays image');
-
     res.json({
       totalSongs, totalPlaylists, totalArtists, totalAlbums, totalUsers,
       totalUserPlaylists, totalComments,
