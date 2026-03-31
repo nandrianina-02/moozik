@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const express = require('express');
+const compression = require('compression'); // npm install compression
 const multer = require('multer');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
@@ -17,6 +18,11 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
+// Compression gzip/brotli — réduit les réponses JSON de ~70%
+app.use(compression({
+  level: 6,           // bon équilibre vitesse/compression
+  threshold: 1024,    // compresser seulement si > 1Ko
+}));
 app.use(express.json());
 
 // --- MONGODB ---
@@ -152,6 +158,18 @@ const UserSchema = new mongoose.Schema({
   role: { type: String, default: 'user' }
 }, { timestamps: true });
 const User = mongoose.model('User', UserSchema);
+
+// ── INDEX MONGODB (performances requêtes) ────
+// Ces index accélèrent les recherches fréquentes
+Song.collection.createIndex({ ordre: 1, createdAt: -1 }).catch(() => {});
+Song.collection.createIndex({ artisteId: 1 }).catch(() => {});
+Song.collection.createIndex({ albumId: 1 }).catch(() => {});
+Song.collection.createIndex({ plays: -1 }).catch(() => {});
+Song.collection.createIndex({ titre: 'text', artiste: 'text' }).catch(() => {}); // recherche texte
+Comment.collection.createIndex({ songId: 1, createdAt: -1 }).catch(() => {});
+Album.collection.createIndex({ artisteId: 1 }).catch(() => {});
+UserPlaylist.collection.createIndex({ userId: 1 }).catch(() => {});
+UserPlaylist.collection.createIndex({ isPublic: 1 }).catch(() => {});
 
 // ── MIDDLEWARES JWT ───────────────────────────
 
@@ -344,7 +362,7 @@ app.put('/users/:id', requireAuth, upload.single('avatar'), async (req, res) => 
     if (req.file) {
       const old = await User.findById(req.params.id);
       if (old?.avatarPublicId) await fromCloud(old.avatarPublicId);
-      const r = await toCloud(req.file.buffer, { folder: 'moozik/avatars', resource_type: 'image', transformation: [{ width: 200, height: 200, crop: 'fill' }] });
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/avatars', resource_type: 'image', transformation: [{ width: 200, height: 200, crop: 'fill', quality: 75, fetch_format: 'auto' }] });
       update.avatar = r.secure_url;
       update.avatarPublicId = r.public_id;
     }
@@ -379,7 +397,11 @@ app.post('/artists/login', async (req, res) => {
 app.get('/artists/verify', requireArtist, (req, res) => res.json({ valid: true, ...req.user }));
 
 app.get('/artists', async (req, res) => {
-  try { res.json(await Artist.find().select('-password').sort({ nom: 1 })); }
+  try {
+    const artists = await Artist.find().select('-password -imagePublicId -__v').sort({ nom: 1 });
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(artists);
+  }
   catch (e) { res.status(500).json(e); }
 });
 
@@ -446,7 +468,7 @@ app.post('/albums', requireAdminOrArtist, upload.single('image'), async (req, re
     if (req.user.role !== 'artist') { const a = await Artist.findById(artisteId); if (a) artisteName = a.nom; }
     let imageUrl = `https://api.dicebear.com/7.x/shapes/svg?seed=album_${Date.now()}`, imagePublicId = '';
     if (req.file) {
-      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }] });
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'auto', quality: 70, fetch_format: 'auto' }] });
       imageUrl = r.secure_url; imagePublicId = r.public_id;
     }
     res.json(await new Album({ titre: req.body.titre, artisteId, artiste: artisteName, annee: req.body.annee || String(new Date().getFullYear()), image: imageUrl, imagePublicId }).save());
@@ -456,7 +478,10 @@ app.post('/albums', requireAdminOrArtist, upload.single('image'), async (req, re
 app.get('/albums', async (req, res) => {
   try {
     const f = req.query.artisteId ? { artisteId: req.query.artisteId } : {};
-    res.json(await Album.find(f).sort({ annee: -1, createdAt: -1 }));
+    const albums = await Album.find(f).sort({ annee: -1, createdAt: -1 })
+      .populate('artisteId', 'nom').select('-imagePublicId -__v');
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(albums);
   } catch (e) { res.status(500).json(e); }
 });
 
@@ -475,7 +500,7 @@ app.put('/albums/:id', requireAdminOrArtist, upload.single('image'), async (req,
     if (req.body.annee) u.annee = req.body.annee;
     if (req.file) {
       await fromCloud(album.imagePublicId);
-      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }] });
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'auto', quality: 70, fetch_format: 'auto' }] });
       u.image = r.secure_url; u.imagePublicId = r.public_id;
     }
     res.json(await Album.findByIdAndUpdate(req.params.id, u, { new: true }));
@@ -517,11 +542,30 @@ app.delete('/albums/:id/remove/:songId', requireAdminOrArtist, async (req, res) 
 
 app.get('/songs/:id/comments', async (req, res) => {
   try {
-    const comments = await Comment.find({ songId: req.params.id }).sort({ createdAt: -1 }).limit(50);
+    const page  = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(20, parseInt(req.query.limit) || 10); // 10 par défaut
+    const skip  = (page - 1) * limit;
+
+    const [comments, total] = await Promise.all([
+      Comment.find({ songId: req.params.id })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .select('-__v'),
+      Comment.countDocuments({ songId: req.params.id })
+    ]);
+
     const t = req.headers.authorization?.split(' ')[1];
     let uid = null;
     if (t) { try { uid = jwt.verify(t, process.env.JWT_SECRET).id; } catch {} }
-    res.json(comments.map(c => ({ ...c.toObject(), likedByMe: uid ? c.likedBy.some(id => String(id) === String(uid)) : false })));
+
+    res.json({
+      comments: comments.map(c => ({
+        ...c.toObject(),
+        likedByMe: uid ? c.likedBy.some(id => String(id) === String(uid)) : false
+      })),
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) }
+    });
   } catch (e) { res.status(500).json(e); }
 });
 
@@ -599,8 +643,50 @@ app.post('/songs/:id/reactions', requireAuth, async (req, res) => {
 // ── SONGS ────────────────────────────────────
 
 app.get('/songs', async (req, res) => {
-  try { res.json(await Song.find().sort({ ordre: 1, createdAt: -1 }).populate('artisteId', 'nom image')); }
+  try {
+    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const limit = Math.min(50, parseInt(req.query.limit) || 30); // max 50 par page
+    const skip  = (page - 1) * limit;
+
+    // Recherche optionnelle
+    const filter = {};
+    if (req.query.q) {
+      const re = new RegExp(req.query.q, 'i');
+      filter.$or = [{ titre: re }, { artiste: re }];
+    }
+    if (req.query.albumId)   filter.albumId   = req.query.albumId;
+    if (req.query.artisteId) filter.artisteId = req.query.artisteId;
+
+    const [songs, total] = await Promise.all([
+      Song.find(filter)
+        .sort({ ordre: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        // Ne pas retourner les champs lourds inutiles côté liste
+        .select('-audioPublicId -imagePublicId -__v')
+        .populate('artisteId', 'nom image'),
+      Song.countDocuments(filter)
+    ]);
+
+    res.set('Cache-Control', 'public, max-age=30'); // 30s de cache navigateur
+    res.json({
+      songs,
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) }
+    });
+  }
   catch (e) { res.status(500).json(e); }
+});
+
+// Route légère : retourne seulement les IDs + updatedAt pour détecter les changements
+// Le frontend compare et ne re-fetch que ce qui a changé
+app.get('/songs/meta', async (req, res) => {
+  try {
+    const meta = await Song.find()
+      .sort({ ordre: 1, createdAt: -1 })
+      .select('_id updatedAt plays liked');
+    res.set('Cache-Control', 'public, max-age=10');
+    res.json(meta);
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.post('/upload', requireAdminOrArtist, upload.fields([{ name: 'audio', maxCount: 1 }, { name: 'image', maxCount: 1 }]), async (req, res) => {
@@ -619,7 +705,7 @@ app.post('/upload', requireAdminOrArtist, upload.fields([{ name: 'audio', maxCou
     const audioResult = await toCloud(audioBuf, { folder: 'moozik/audio', resource_type: 'video', format: 'mp3' });
     let imageUrl = `https://api.dicebear.com/7.x/shapes/svg?seed=${audioResult.public_id}`, imagePublicId = '';
     if (imgBuf) {
-      const ir = await toCloud(imgBuf, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }] });
+      const ir = await toCloud(imgBuf, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'auto', quality: 70, fetch_format: 'auto' }] });
       imageUrl = ir.secure_url; imagePublicId = ir.public_id;
     }
 
@@ -682,7 +768,7 @@ app.put('/songs/:id', requireAdminOrArtist, upload.single('image'), async (req, 
     if (req.body.albumId !== undefined) u.albumId = req.body.albumId || null;
     if (req.file) {
       await fromCloud(song.imagePublicId);
-      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }] });
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'auto', quality: 70, fetch_format: 'auto' }] });
       u.image = r.secure_url; u.imagePublicId = r.public_id;
     }
     res.json(await Song.findByIdAndUpdate(req.params.id, u, { new: true }));
@@ -715,7 +801,12 @@ app.get('/search', async (req, res) => {
 // ── PLAYLISTS ADMIN ──────────────────────────
 
 app.get('/playlists', async (req, res) => {
-  try { res.json(await Playlist.find().populate('musiques')); }
+  try {
+    const playlists = await Playlist.find()
+      .populate('musiques', 'titre artiste image src plays liked reactions ordre');
+    res.set('Cache-Control', 'public, max-age=30');
+    res.json(playlists);
+  }
   catch (e) { res.status(500).json(e); }
 });
 app.post('/playlists', requireAdmin, async (req, res) => {
