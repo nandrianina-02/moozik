@@ -2,12 +2,10 @@ require('dotenv').config();
 
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v2: cloudinary } = require('cloudinary');
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
 
@@ -19,80 +17,42 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
-
 app.use(express.json());
 
 // --- MONGODB ---
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ Connecté à MongoDB Atlas"))
-  .catch(err => console.error("❌ Erreur MongoDB :", err));
+  .then(() => console.log('✅ MongoDB connecté'))
+  .catch(err => console.error('❌ MongoDB :', err));
 
-// =====================
-// --- CLOUDINARY CONFIG ---
-// =====================
-// Ajouter dans votre .env :
-//   CLOUDINARY_CLOUD_NAME=your_cloud_name
-//   CLOUDINARY_API_KEY=your_api_key
-//   CLOUDINARY_API_SECRET=your_api_secret
+// --- CLOUDINARY ---
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key:    process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// =====================
-// --- MULTER STORAGES ---
-// =====================
-
-// Storage Cloudinary pour les images (pochettes, photos artistes/albums)
-const imageStorage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'moozik/images',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
-    transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }],
-  },
-});
-
-// Upload image seule (routes artiste, album)
-const uploadImage = multer({
-  storage: imageStorage,
-  fileFilter: (req, file, cb) => {
-    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    allowed.includes(file.mimetype) ? cb(null, true) : cb(new Error("Type d'image non supporté"));
-  },
-  limits: { fileSize: 10 * 1024 * 1024 },
-});
-
-// Pour /upload : on bufferise en RAM puis on envoie manuellement à Cloudinary
-// (nécessaire pour uploader audio ET image en même temps avec des resource_type différents)
-const uploadMixed = multer({
+// Tous les fichiers en RAM → Cloudinary via upload_stream
+const upload = multer({
   storage: multer.memoryStorage(),
   fileFilter: (req, file, cb) => {
-    const allowed = ['audio/mpeg', 'audio/mp3', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    allowed.includes(file.mimetype) ? cb(null, true) : cb(new Error("Type de fichier non supporté"));
+    const ok = ['audio/mpeg', 'audio/mp3', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    ok.includes(file.mimetype) ? cb(null, true) : cb(new Error('Type non supporté'));
   },
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
-// Helper : uploader un Buffer vers Cloudinary
-const uploadBuffer = (buffer, options) =>
+const toCloud = (buffer, opts) =>
   new Promise((resolve, reject) => {
-    cloudinary.uploader.upload_stream(options, (err, result) => {
-      if (err) reject(err); else resolve(result);
-    }).end(buffer);
+    cloudinary.uploader.upload_stream(opts, (err, r) => err ? reject(err) : resolve(r)).end(buffer);
   });
 
-// Helper : supprimer un asset Cloudinary
-const destroyCloudinary = async (publicId, resourceType = 'image') => {
+const fromCloud = async (publicId, rt = 'image') => {
   if (!publicId) return;
-  try { await cloudinary.uploader.destroy(publicId, { resource_type: resourceType }); }
-  catch (e) { console.warn('Cloudinary destroy warning:', e.message); }
+  try { await cloudinary.uploader.destroy(publicId, { resource_type: rt }); }
+  catch (e) { console.warn('Cloudinary destroy:', e.message); }
 };
 
-// =====================
-// --- SCHEMAS ---
-// =====================
+// ── SCHEMAS ──────────────────────────────────
 
 const ArtistSchema = new mongoose.Schema({
   nom: { type: String, required: true },
@@ -100,7 +60,7 @@ const ArtistSchema = new mongoose.Schema({
   image: { type: String, default: '' },
   imagePublicId: { type: String, default: '' },
   email: { type: String, unique: true, sparse: true },
-  password: { type: String },
+  password: String,
   role: { type: String, default: 'artist' }
 }, { timestamps: true });
 const Artist = mongoose.model('Artist', ArtistSchema);
@@ -112,7 +72,6 @@ const AlbumSchema = new mongoose.Schema({
   annee: { type: String, default: '' },
   image: { type: String, default: '' },
   imagePublicId: { type: String, default: '' },
-  ordre: { type: Number, default: 0 }
 }, { timestamps: true });
 const Album = mongoose.model('Album', AlbumSchema);
 
@@ -142,6 +101,15 @@ const ReactionSchema = new mongoose.Schema({
 ReactionSchema.index({ songId: 1, userId: 1 }, { unique: true });
 const Reaction = mongoose.model('Reaction', ReactionSchema);
 
+// UserPlay: track which user played which song
+const UserPlaySchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  songId: { type: mongoose.Schema.Types.ObjectId, ref: 'Song', required: true },
+  count: { type: Number, default: 1 }
+}, { timestamps: true });
+UserPlaySchema.index({ userId: 1, songId: 1 }, { unique: true });
+const UserPlay = mongoose.model('UserPlay', UserPlaySchema);
+
 const SongSchema = new mongoose.Schema({
   titre: String,
   artiste: String,
@@ -150,7 +118,7 @@ const SongSchema = new mongoose.Schema({
   image: String,
   imagePublicId: { type: String, default: '' },
   src: String,
-  audioPublicId: { type: String, default: '' }, // public_id Cloudinary (resource_type: video)
+  audioPublicId: { type: String, default: '' },
   liked: { type: Boolean, default: false },
   plays: { type: Number, default: 0 },
   ordre: { type: Number, default: 0 }
@@ -185,723 +153,680 @@ const UserSchema = new mongoose.Schema({
 }, { timestamps: true });
 const User = mongoose.model('User', UserSchema);
 
-// =====================
-// --- MIDDLEWARES JWT ---
-// =====================
+// ── MIDDLEWARES JWT ───────────────────────────
+
 const requireAdmin = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ message: "Non autorisé" });
+  const t = req.headers.authorization?.split(' ')[1];
+  if (!t) return res.status(401).json({ message: 'Non autorisé' });
   try {
-    req.admin = jwt.verify(token, process.env.JWT_SECRET);
-    if (req.admin.role !== 'admin') return res.status(403).json({ message: "Accès refusé" });
+    req.admin = jwt.verify(t, process.env.JWT_SECRET);
+    if (req.admin.role !== 'admin') return res.status(403).json({ message: 'Accès refusé' });
     next();
-  } catch { return res.status(401).json({ message: "Token invalide" }); }
+  } catch { res.status(401).json({ message: 'Token invalide' }); }
 };
 
 const requireArtist = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ message: "Non autorisé" });
+  const t = req.headers.authorization?.split(' ')[1];
+  if (!t) return res.status(401).json({ message: 'Non autorisé' });
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    if (decoded.role !== 'artist' && decoded.role !== 'admin') return res.status(403).json({ message: "Accès refusé" });
-    req.user = decoded;
-    next();
-  } catch { return res.status(401).json({ message: "Token invalide" }); }
+    const d = jwt.verify(t, process.env.JWT_SECRET);
+    if (d.role !== 'artist' && d.role !== 'admin') return res.status(403).json({ message: 'Accès refusé' });
+    req.user = d; next();
+  } catch { res.status(401).json({ message: 'Token invalide' }); }
 };
 
 const requireAdminOrArtist = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ message: "Non autorisé" });
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch { return res.status(401).json({ message: "Token invalide" }); }
+  const t = req.headers.authorization?.split(' ')[1];
+  if (!t) return res.status(401).json({ message: 'Non autorisé' });
+  try { req.user = jwt.verify(t, process.env.JWT_SECRET); next(); }
+  catch { res.status(401).json({ message: 'Token invalide' }); }
 };
 
 const requireAuth = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ message: "Non autorisé" });
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch { return res.status(401).json({ message: "Token invalide" }); }
+  const t = req.headers.authorization?.split(' ')[1];
+  if (!t) return res.status(401).json({ message: 'Non autorisé' });
+  try { req.user = jwt.verify(t, process.env.JWT_SECRET); next(); }
+  catch { res.status(401).json({ message: 'Token invalide' }); }
 };
 
-// =====================
-// --- AUTH ADMIN ---
-// =====================
+// ── AUTH ADMIN ───────────────────────────────
+
 app.post('/admin/register', async (req, res) => {
   try {
     const { email, password, secret } = req.body;
-    if (secret !== process.env.REGISTER_SECRET) return res.status(403).json({ message: "Secret invalide" });
-    const existing = await Admin.findOne({ email });
-    if (existing) return res.status(400).json({ message: "Admin déjà existant" });
-    const hashed = await bcrypt.hash(password, 12);
-    await new Admin({ email, password: hashed }).save();
-    res.json({ message: "Admin créé ✅" });
-  } catch (err) { res.status(500).json(err); }
+    if (secret !== process.env.REGISTER_SECRET) return res.status(403).json({ message: 'Secret invalide' });
+    if (await Admin.findOne({ email })) return res.status(400).json({ message: 'Admin déjà existant' });
+    await new Admin({ email, password: await bcrypt.hash(password, 12) }).save();
+    res.json({ message: 'Admin créé ✅' });
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.post('/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const admin = await Admin.findOne({ email });
-    if (!admin) return res.status(401).json({ message: "Email ou mot de passe incorrect" });
-    const valid = await bcrypt.compare(password, admin.password);
-    if (!valid) return res.status(401).json({ message: "Email ou mot de passe incorrect" });
+    if (!admin || !await bcrypt.compare(password, admin.password))
+      return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
     const token = jwt.sign({ id: admin._id, email: admin.email, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, email: admin.email, role: 'admin' });
-  } catch (err) { res.status(500).json(err); }
+  } catch (e) { res.status(500).json(e); }
 });
 
-app.get('/admin/verify', requireAdmin, (req, res) => {
-  res.json({ valid: true, email: req.admin.email, role: 'admin' });
+app.get('/admin/verify', requireAdmin, (req, res) =>
+  res.json({ valid: true, email: req.admin.email, role: 'admin' }));
+
+// ── ADMIN: GESTION UTILISATEURS ──────────────
+
+// Liste tous les utilisateurs avec stats de base
+app.get('/admin/users', requireAdmin, async (req, res) => {
+  try {
+    const users = await User.find().select('-password').sort({ createdAt: -1 });
+    // Enrichir avec stats de base
+    const enriched = await Promise.all(users.map(async (u) => {
+      const [totalPlaylists, totalLikes, totalPlays] = await Promise.all([
+        UserPlaylist.countDocuments({ userId: u._id }),
+        Reaction.countDocuments({ userId: String(u._id), type: 'heart' }),
+        UserPlay.aggregate([
+          { $match: { userId: u._id } },
+          { $group: { _id: null, total: { $sum: '$count' } } }
+        ]).then(r => r[0]?.total || 0)
+      ]);
+      return { ...u.toObject(), totalPlaylists, totalLikes, totalPlays };
+    }));
+    res.json(enriched);
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// =====================
-// --- AUTH USER ---
-// =====================
+// Stats détaillées d'un utilisateur
+app.get('/admin/users/:id/stats', requireAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select('-password');
+    if (!user) return res.status(404).json({ message: 'Utilisateur introuvable' });
+
+    const [totalPlaylists, totalComments, playsAgg, topPlaysRaw] = await Promise.all([
+      UserPlaylist.countDocuments({ userId: user._id }),
+      Comment.countDocuments({ userId: user._id }),
+      UserPlay.aggregate([
+        { $match: { userId: user._id } },
+        { $group: { _id: null, total: { $sum: '$count' } } }
+      ]),
+      UserPlay.find({ userId: user._id })
+        .sort({ count: -1 })
+        .limit(10)
+        .populate('songId', 'titre artiste image plays')
+    ]);
+
+    const totalPlays = playsAgg[0]?.total || 0;
+    const topSongs = topPlaysRaw
+      .filter(p => p.songId)
+      .map(p => ({ ...p.songId.toObject(), userPlays: p.count }));
+
+    // Réactions "heart" de l'utilisateur = ses favoris
+    const reactions = await Reaction.find({ userId: String(user._id), type: 'heart' });
+    const likedSongIds = reactions.map(r => r.songId);
+    const likedSongs = await Song.find({ _id: { $in: likedSongIds } }).select('titre artiste image plays').limit(10);
+
+    res.json({
+      user,
+      totalPlays,
+      totalPlaylists,
+      totalComments,
+      totalLikes: reactions.length,
+      topSongs,
+      likedSongs,
+    });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// Mettre à jour un utilisateur (admin)
+app.put('/admin/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const { nom, email } = req.body;
+    const update = {};
+    if (nom) update.nom = nom;
+    if (email) update.email = email;
+    const user = await User.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
+    if (!user) return res.status(404).json({ message: 'Introuvable' });
+    res.json(user);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// Supprimer un utilisateur
+app.delete('/admin/users/:id', requireAdmin, async (req, res) => {
+  try {
+    await User.findByIdAndDelete(req.params.id);
+    await UserPlaylist.deleteMany({ userId: req.params.id });
+    await Comment.deleteMany({ userId: req.params.id });
+    await Reaction.deleteMany({ userId: req.params.id });
+    await UserPlay.deleteMany({ userId: req.params.id });
+    res.json({ message: 'Utilisateur supprimé' });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// ── AUTH USER ────────────────────────────────
+
 app.post('/users/register', async (req, res) => {
   try {
     const { email, password, nom } = req.body;
-    if (!email || !password) return res.status(400).json({ message: "Email et mot de passe requis" });
-    const existing = await User.findOne({ email });
-    if (existing) return res.status(400).json({ message: "Cet email est déjà utilisé" });
-    const hashed = await bcrypt.hash(password, 12);
-    const user = await new User({ email, password: hashed, nom: nom || email.split('@')[0] }).save();
+    if (!email || !password) return res.status(400).json({ message: 'Email et mot de passe requis' });
+    if (await User.findOne({ email })) return res.status(400).json({ message: 'Email déjà utilisé' });
+    const user = await new User({ email, password: await bcrypt.hash(password, 12), nom: nom || email.split('@')[0] }).save();
     const token = jwt.sign({ id: user._id, email: user.email, nom: user.nom, role: 'user' }, process.env.JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, email: user.email, nom: user.nom, role: 'user', userId: user._id });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 app.post('/users/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const user = await User.findOne({ email });
-    if (!user) return res.status(401).json({ message: "Email ou mot de passe incorrect" });
-    const valid = await bcrypt.compare(password, user.password);
-    if (!valid) return res.status(401).json({ message: "Email ou mot de passe incorrect" });
+    if (!user || !await bcrypt.compare(password, user.password))
+      return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
     const token = jwt.sign({ id: user._id, email: user.email, nom: user.nom, role: 'user' }, process.env.JWT_SECRET, { expiresIn: '30d' });
     res.json({ token, email: user.email, nom: user.nom, role: 'user', userId: user._id });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-app.get('/users/verify', requireAuth, (req, res) => {
-  res.json({ valid: true, ...req.user });
+app.get('/users/verify', requireAuth, (req, res) => res.json({ valid: true, ...req.user }));
+
+// Mise à jour profil utilisateur
+app.put('/users/:id', requireAuth, upload.single('avatar'), async (req, res) => {
+  try {
+    if (String(req.user.id) !== String(req.params.id) && req.user.role !== 'admin')
+      return res.status(403).json({ message: 'Accès refusé' });
+    const update = {};
+    if (req.body.nom) update.nom = req.body.nom;
+    if (req.body.email) update.email = req.body.email;
+    if (req.body.password) {
+      if (req.body.password.length < 6) return res.status(400).json({ message: 'Mot de passe trop court (6 min)' });
+      update.password = await bcrypt.hash(req.body.password, 12);
+    }
+    if (req.file) {
+      const old = await User.findById(req.params.id);
+      if (old?.avatarPublicId) await fromCloud(old.avatarPublicId);
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/avatars', resource_type: 'image', transformation: [{ width: 200, height: 200, crop: 'fill' }] });
+      update.avatar = r.secure_url;
+      update.avatarPublicId = r.public_id;
+    }
+    const user = await User.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
+    if (!user) return res.status(404).json({ message: 'Introuvable' });
+    res.json(user);
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// =====================
-// --- AUTH ARTISTE ---
-// =====================
+// ── AUTH ARTISTE ─────────────────────────────
+
 app.post('/artists', requireAdmin, async (req, res) => {
   try {
     const { nom, bio, email, password } = req.body;
-    const hashed = password ? await bcrypt.hash(password, 12) : null;
-    const artist = new Artist({ nom, bio: bio || '', email, password: hashed });
+    const artist = new Artist({ nom, bio: bio || '', email, password: password ? await bcrypt.hash(password, 12) : null });
     await artist.save();
     res.json(artist);
-  } catch (err) { res.status(500).json(err); }
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.post('/artists/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const artist = await Artist.findOne({ email });
-    if (!artist || !artist.password) return res.status(401).json({ message: "Email ou mot de passe incorrect" });
-    const valid = await bcrypt.compare(password, artist.password);
-    if (!valid) return res.status(401).json({ message: "Email ou mot de passe incorrect" });
+    if (!artist?.password || !await bcrypt.compare(password, artist.password))
+      return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
     const token = jwt.sign({ id: artist._id, email: artist.email, nom: artist.nom, role: 'artist' }, process.env.JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, email: artist.email, nom: artist.nom, role: 'artist', artisteId: artist._id });
-  } catch (err) { res.status(500).json(err); }
+  } catch (e) { res.status(500).json(e); }
 });
 
-app.get('/artists/verify', requireArtist, (req, res) => {
-  res.json({ valid: true, ...req.user });
-});
+app.get('/artists/verify', requireArtist, (req, res) => res.json({ valid: true, ...req.user }));
 
 app.get('/artists', async (req, res) => {
-  try {
-    const artists = await Artist.find().select('-password').sort({ nom: 1 });
-    res.json(artists);
-  } catch (err) { res.status(500).json(err); }
+  try { res.json(await Artist.find().select('-password').sort({ nom: 1 })); }
+  catch (e) { res.status(500).json(e); }
 });
 
 app.get('/artists/:id', async (req, res) => {
   try {
     const artist = await Artist.findById(req.params.id).select('-password');
-    if (!artist) return res.status(404).json({ message: "Artiste introuvable" });
+    if (!artist) return res.status(404).json({ message: 'Artiste introuvable' });
     const songs = await Song.find({ artisteId: req.params.id }).sort({ ordre: 1, createdAt: -1 });
     res.json({ artist, songs });
-  } catch (err) { res.status(500).json(err); }
+  } catch (e) { res.status(500).json(e); }
 });
 
-app.put('/artists/:id', requireAdmin, uploadImage.single('image'), async (req, res) => {
+app.put('/artists/:id', requireAdmin, upload.single('image'), async (req, res) => {
   try {
-    const { nom, bio } = req.body;
     const update = {};
-    if (nom) update.nom = nom;
-    if (bio !== undefined) update.bio = bio;
+    if (req.body.nom) update.nom = req.body.nom;
+    if (req.body.bio !== undefined) update.bio = req.body.bio;
     if (req.file) {
-      const oldArtist = await Artist.findById(req.params.id);
-      await destroyCloudinary(oldArtist?.imagePublicId);
-      update.image = req.file.path;
-      update.imagePublicId = req.file.filename;
+      const old = await Artist.findById(req.params.id);
+      await fromCloud(old?.imagePublicId);
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 400, height: 400, crop: 'fill', quality: 'auto' }] });
+      update.image = r.secure_url; update.imagePublicId = r.public_id;
     }
-    const artist = await Artist.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
-    res.json(artist);
-  } catch (err) { res.status(500).json(err); }
+    res.json(await Artist.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password'));
+  } catch (e) { res.status(500).json(e); }
+});
+
+// Mise à jour profil artiste (par lui-même)
+app.put('/artists/me', requireArtist, upload.single('image'), async (req, res) => {
+  try {
+    const update = {};
+    if (req.body.nom) update.nom = req.body.nom;
+    if (req.body.bio !== undefined) update.bio = req.body.bio;
+    if (req.body.password) {
+      if (req.body.password.length < 6) return res.status(400).json({ message: 'Mot de passe trop court' });
+      update.password = await bcrypt.hash(req.body.password, 12);
+    }
+    if (req.file) {
+      const old = await Artist.findById(req.user.id);
+      await fromCloud(old?.imagePublicId);
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 400, height: 400, crop: 'fill', quality: 'auto' }] });
+      update.image = r.secure_url; update.imagePublicId = r.public_id;
+    }
+    res.json(await Artist.findByIdAndUpdate(req.user.id, update, { new: true }).select('-password'));
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.delete('/artists/:id', requireAdmin, async (req, res) => {
   try {
-    const artist = await Artist.findById(req.params.id);
-    await destroyCloudinary(artist?.imagePublicId);
+    const a = await Artist.findById(req.params.id);
+    await fromCloud(a?.imagePublicId);
     await Artist.findByIdAndDelete(req.params.id);
-    res.json({ message: "Artiste supprimé" });
-  } catch (err) { res.status(500).json(err); }
+    res.json({ message: 'Artiste supprimé' });
+  } catch (e) { res.status(500).json(e); }
 });
 
-// =====================
-// --- ALBUMS ---
-// =====================
-app.post('/albums', requireAdminOrArtist, uploadImage.single('image'), async (req, res) => {
+// ── ALBUMS ───────────────────────────────────
+
+app.post('/albums', requireAdminOrArtist, upload.single('image'), async (req, res) => {
   try {
-    const { titre, annee } = req.body;
-    let artisteId = req.body.artisteId;
-    let artisteName = '';
-    if (req.user.role === 'artist') {
-      artisteId = req.user.id;
-      artisteName = req.user.nom;
-    } else if (artisteId) {
-      const artist = await Artist.findById(artisteId);
-      if (artist) artisteName = artist.nom;
+    let artisteId = req.user.role === 'artist' ? req.user.id : req.body.artisteId;
+    if (!artisteId) return res.status(400).json({ message: 'artisteId requis' });
+    let artisteName = req.user.role === 'artist' ? req.user.nom : '';
+    if (req.user.role !== 'artist') { const a = await Artist.findById(artisteId); if (a) artisteName = a.nom; }
+    let imageUrl = `https://api.dicebear.com/7.x/shapes/svg?seed=album_${Date.now()}`, imagePublicId = '';
+    if (req.file) {
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }] });
+      imageUrl = r.secure_url; imagePublicId = r.public_id;
     }
-    if (!artisteId) return res.status(400).json({ message: "artisteId requis" });
-
-    const imageUrl = req.file ? req.file.path : `https://api.dicebear.com/7.x/shapes/svg?seed=album_${Date.now()}`;
-    const imagePublicId = req.file ? req.file.filename : '';
-
-    const album = new Album({
-      titre, artisteId, artiste: artisteName,
-      annee: annee || new Date().getFullYear().toString(),
-      image: imageUrl, imagePublicId
-    });
-    await album.save();
-    res.json(album);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    res.json(await new Album({ titre: req.body.titre, artisteId, artiste: artisteName, annee: req.body.annee || String(new Date().getFullYear()), image: imageUrl, imagePublicId }).save());
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 app.get('/albums', async (req, res) => {
   try {
-    const filter = {};
-    if (req.query.artisteId) filter.artisteId = req.query.artisteId;
-    const albums = await Album.find(filter).sort({ annee: -1, createdAt: -1 });
-    res.json(albums);
-  } catch (err) { res.status(500).json(err); }
+    const f = req.query.artisteId ? { artisteId: req.query.artisteId } : {};
+    res.json(await Album.find(f).sort({ annee: -1, createdAt: -1 }));
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.get('/albums/:id', async (req, res) => {
-  try {
-    const album = await Album.findById(req.params.id);
-    if (!album) return res.status(404).json({ message: "Album introuvable" });
-    res.json(album);
-  } catch (err) { res.status(500).json(err); }
+  try { const a = await Album.findById(req.params.id); if (!a) return res.status(404).json({ message: 'Introuvable' }); res.json(a); }
+  catch (e) { res.status(500).json(e); }
 });
 
-app.put('/albums/:id', requireAdminOrArtist, uploadImage.single('image'), async (req, res) => {
+app.put('/albums/:id', requireAdminOrArtist, upload.single('image'), async (req, res) => {
   try {
     const album = await Album.findById(req.params.id);
-    if (!album) return res.status(404).json({ message: "Album introuvable" });
-    if (req.user.role === 'artist' && String(album.artisteId) !== String(req.user.id)) {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
-    const update = {};
-    if (req.body.titre) update.titre = req.body.titre;
-    if (req.body.annee) update.annee = req.body.annee;
+    if (!album) return res.status(404).json({ message: 'Introuvable' });
+    if (req.user.role === 'artist' && String(album.artisteId) !== String(req.user.id)) return res.status(403).json({ message: 'Accès refusé' });
+    const u = {};
+    if (req.body.titre) u.titre = req.body.titre;
+    if (req.body.annee) u.annee = req.body.annee;
     if (req.file) {
-      await destroyCloudinary(album.imagePublicId);
-      update.image = req.file.path;
-      update.imagePublicId = req.file.filename;
+      await fromCloud(album.imagePublicId);
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }] });
+      u.image = r.secure_url; u.imagePublicId = r.public_id;
     }
-    const updated = await Album.findByIdAndUpdate(req.params.id, update, { new: true });
-    res.json(updated);
-  } catch (err) { res.status(500).json(err); }
+    res.json(await Album.findByIdAndUpdate(req.params.id, u, { new: true }));
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.delete('/albums/:id', requireAdminOrArtist, async (req, res) => {
   try {
-    const album = await Album.findById(req.params.id);
-    if (!album) return res.status(404).json({ message: "Album introuvable" });
-    if (req.user.role === 'artist' && String(album.artisteId) !== String(req.user.id)) {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
-    await destroyCloudinary(album.imagePublicId);
+    const a = await Album.findById(req.params.id);
+    if (!a) return res.status(404).json({ message: 'Introuvable' });
+    if (req.user.role === 'artist' && String(a.artisteId) !== String(req.user.id)) return res.status(403).json({ message: 'Accès refusé' });
+    await fromCloud(a.imagePublicId);
     await Song.updateMany({ albumId: req.params.id }, { $unset: { albumId: '' } });
     await Album.findByIdAndDelete(req.params.id);
-    res.json({ message: "Album supprimé" });
-  } catch (err) { res.status(500).json(err); }
+    res.json({ message: 'Supprimé' });
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.post('/albums/:id/add/:songId', requireAdminOrArtist, async (req, res) => {
   try {
-    const album = await Album.findById(req.params.id);
-    if (!album) return res.status(404).json({ message: "Album introuvable" });
-    if (req.user.role === 'artist' && String(album.artisteId) !== String(req.user.id)) {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
-    const song = await Song.findByIdAndUpdate(req.params.songId, { albumId: req.params.id }, { new: true });
-    res.json(song);
-  } catch (err) { res.status(500).json(err); }
+    const a = await Album.findById(req.params.id);
+    if (!a) return res.status(404).json({ message: 'Introuvable' });
+    if (req.user.role === 'artist' && String(a.artisteId) !== String(req.user.id)) return res.status(403).json({ message: 'Accès refusé' });
+    res.json(await Song.findByIdAndUpdate(req.params.songId, { albumId: req.params.id }, { new: true }));
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.delete('/albums/:id/remove/:songId', requireAdminOrArtist, async (req, res) => {
   try {
-    const album = await Album.findById(req.params.id);
-    if (!album) return res.status(404).json({ message: "Album introuvable" });
-    if (req.user.role === 'artist' && String(album.artisteId) !== String(req.user.id)) {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
+    const a = await Album.findById(req.params.id);
+    if (!a) return res.status(404).json({ message: 'Introuvable' });
+    if (req.user.role === 'artist' && String(a.artisteId) !== String(req.user.id)) return res.status(403).json({ message: 'Accès refusé' });
     await Song.findByIdAndUpdate(req.params.songId, { $unset: { albumId: '' } });
-    res.json({ message: "Musique retirée de l'album" });
-  } catch (err) { res.status(500).json(err); }
+    res.json({ message: 'Retiré' });
+  } catch (e) { res.status(500).json(e); }
 });
 
-// =====================
-// --- COMMENTS ---
-// =====================
+// ── COMMENTS ─────────────────────────────────
+
 app.get('/songs/:id/comments', async (req, res) => {
   try {
     const comments = await Comment.find({ songId: req.params.id }).sort({ createdAt: -1 }).limit(50);
-    const token = req.headers.authorization?.split(' ')[1];
-    let userId = null;
-    if (token) { try { userId = jwt.verify(token, process.env.JWT_SECRET).id; } catch {} }
-    const result = comments.map(c => ({
-      ...c.toObject(),
-      likedByMe: userId ? c.likedBy.some(id => String(id) === String(userId)) : false
-    }));
-    res.json(result);
-  } catch (err) { res.status(500).json(err); }
+    const t = req.headers.authorization?.split(' ')[1];
+    let uid = null;
+    if (t) { try { uid = jwt.verify(t, process.env.JWT_SECRET).id; } catch {} }
+    res.json(comments.map(c => ({ ...c.toObject(), likedByMe: uid ? c.likedBy.some(id => String(id) === String(uid)) : false })));
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.post('/songs/:id/comments', requireAuth, async (req, res) => {
   try {
     const { texte, auteur } = req.body;
-    if (!texte?.trim()) return res.status(400).json({ message: "Texte requis" });
-    const comment = new Comment({
-      songId: req.params.id, texte: texte.trim(),
-      auteur: auteur || req.user.nom || req.user.email, userId: req.user.id
-    });
-    await comment.save();
-    res.json(comment);
-  } catch (err) { res.status(500).json(err); }
+    if (!texte?.trim()) return res.status(400).json({ message: 'Texte requis' });
+    res.json(await new Comment({ songId: req.params.id, texte: texte.trim(), auteur: auteur || req.user.nom || req.user.email, userId: req.user.id }).save());
+  } catch (e) { res.status(500).json(e); }
 });
 
-app.put('/songs/:songId/comments/:commentId/like', requireAuth, async (req, res) => {
+app.put('/songs/:sid/comments/:cid/like', requireAuth, async (req, res) => {
   try {
-    const comment = await Comment.findById(req.params.commentId);
-    if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
-    const userId = req.user.id;
-    const alreadyLiked = comment.likedBy.some(id => String(id) === String(userId));
-    if (alreadyLiked) {
-      comment.likedBy = comment.likedBy.filter(id => String(id) !== String(userId));
-      comment.likes = Math.max(0, comment.likes - 1);
-    } else {
-      comment.likedBy.push(userId);
-      comment.likes += 1;
-    }
-    await comment.save();
-    res.json({ ...comment.toObject(), likedByMe: !alreadyLiked });
-  } catch (err) { res.status(500).json(err); }
+    const c = await Comment.findById(req.params.cid);
+    if (!c) return res.status(404).json({ message: 'Introuvable' });
+    const uid = req.user.id;
+    const liked = c.likedBy.some(id => String(id) === String(uid));
+    if (liked) { c.likedBy = c.likedBy.filter(id => String(id) !== String(uid)); c.likes = Math.max(0, c.likes - 1); }
+    else { c.likedBy.push(uid); c.likes++; }
+    await c.save();
+    res.json({ ...c.toObject(), likedByMe: !liked });
+  } catch (e) { res.status(500).json(e); }
 });
 
-app.post('/songs/:songId/comments/:commentId/reply', requireAuth, async (req, res) => {
+app.post('/songs/:sid/comments/:cid/reply', requireAuth, async (req, res) => {
   try {
     const { texte, auteur } = req.body;
-    if (!texte?.trim()) return res.status(400).json({ message: "Texte requis" });
-    const comment = await Comment.findById(req.params.commentId);
-    if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
-    comment.reponses.push({ texte: texte.trim(), auteur: auteur || req.user.nom || req.user.email, userId: req.user.id });
-    await comment.save();
-    res.json(comment);
-  } catch (err) { res.status(500).json(err); }
+    if (!texte?.trim()) return res.status(400).json({ message: 'Texte requis' });
+    const c = await Comment.findById(req.params.cid);
+    if (!c) return res.status(404).json({ message: 'Introuvable' });
+    c.reponses.push({ texte: texte.trim(), auteur: auteur || req.user.nom || req.user.email, userId: req.user.id });
+    res.json(await c.save());
+  } catch (e) { res.status(500).json(e); }
 });
 
-app.delete('/songs/:songId/comments/:commentId', requireAuth, async (req, res) => {
+app.delete('/songs/:sid/comments/:cid', requireAuth, async (req, res) => {
   try {
-    const comment = await Comment.findById(req.params.commentId);
-    if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
-    if (String(comment.userId) !== String(req.user.id) && req.user.role !== 'admin') {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
-    await Comment.findByIdAndDelete(req.params.commentId);
-    res.json({ message: "Commentaire supprimé" });
-  } catch (err) { res.status(500).json(err); }
+    const c = await Comment.findById(req.params.cid);
+    if (!c) return res.status(404).json({ message: 'Introuvable' });
+    if (String(c.userId) !== String(req.user.id) && req.user.role !== 'admin') return res.status(403).json({ message: 'Accès refusé' });
+    await Comment.findByIdAndDelete(req.params.cid);
+    res.json({ message: 'Supprimé' });
+  } catch (e) { res.status(500).json(e); }
 });
 
-// =====================
-// --- REACTIONS ---
-// =====================
+// ── REACTIONS ────────────────────────────────
+
 app.get('/songs/:id/reactions', async (req, res) => {
   try {
-    const reactions = await Reaction.find({ songId: req.params.id });
+    const list = await Reaction.find({ songId: req.params.id });
     const counts = { fire: 0, heart: 0, star: 0 };
-    reactions.forEach(r => { if (counts[r.type] !== undefined) counts[r.type]++; });
-    const token = req.headers.authorization?.split(' ')[1];
+    list.forEach(r => { if (counts[r.type] !== undefined) counts[r.type]++; });
+    const t = req.headers.authorization?.split(' ')[1];
     let userReaction = null;
-    if (token) {
-      try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const mine = reactions.find(r => String(r.userId) === String(decoded.id));
-        if (mine) userReaction = mine.type;
-      } catch {}
-    }
+    if (t) { try { const d = jwt.verify(t, process.env.JWT_SECRET); const m = list.find(r => String(r.userId) === String(d.id)); if (m) userReaction = m.type; } catch {} }
     res.json({ ...counts, userReaction });
-  } catch (err) { res.status(500).json(err); }
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.post('/songs/:id/reactions', requireAuth, async (req, res) => {
   try {
     const { type } = req.body;
-    if (!['fire', 'heart', 'star'].includes(type)) return res.status(400).json({ message: "Type invalide" });
-    const existing = await Reaction.findOne({ songId: req.params.id, userId: req.user.id });
-    if (existing) {
-      if (existing.type === type) await Reaction.deleteOne({ _id: existing._id });
-      else { existing.type = type; await existing.save(); }
-    } else {
-      await new Reaction({ songId: req.params.id, userId: req.user.id, type }).save();
-    }
-    const reactions = await Reaction.find({ songId: req.params.id });
+    if (!['fire', 'heart', 'star'].includes(type)) return res.status(400).json({ message: 'Type invalide' });
+    const ex = await Reaction.findOne({ songId: req.params.id, userId: req.user.id });
+    if (ex) { if (ex.type === type) await Reaction.deleteOne({ _id: ex._id }); else { ex.type = type; await ex.save(); } }
+    else await new Reaction({ songId: req.params.id, userId: req.user.id, type }).save();
+    const list = await Reaction.find({ songId: req.params.id });
     const counts = { fire: 0, heart: 0, star: 0 };
-    reactions.forEach(r => { if (counts[r.type] !== undefined) counts[r.type]++; });
-    const mine = reactions.find(r => String(r.userId) === String(req.user.id));
-    res.json({ ...counts, userReaction: mine ? mine.type : null });
-  } catch (err) { res.status(500).json(err); }
+    list.forEach(r => { if (counts[r.type] !== undefined) counts[r.type]++; });
+    const m = list.find(r => String(r.userId) === String(req.user.id));
+    res.json({ ...counts, userReaction: m ? m.type : null });
+  } catch (e) { res.status(500).json(e); }
 });
 
-// =====================
-// --- ROUTES SONGS ---
-// =====================
+// ── SONGS ────────────────────────────────────
+
 app.get('/songs', async (req, res) => {
-  try {
-    const songs = await Song.find().sort({ ordre: 1, createdAt: -1 }).populate('artisteId', 'nom image');
-    res.json(songs);
-  } catch (err) { res.status(500).json(err); }
+  try { res.json(await Song.find().sort({ ordre: 1, createdAt: -1 }).populate('artisteId', 'nom image')); }
+  catch (e) { res.status(500).json(e); }
 });
 
-// POST /upload — audio + image → Cloudinary via buffer
-app.post('/upload', requireAdminOrArtist, uploadMixed.fields([
-  { name: 'audio', maxCount: 1 },
-  { name: 'image', maxCount: 1 }
-]), async (req, res) => {
+app.post('/upload', requireAdminOrArtist, upload.fields([{ name: 'audio', maxCount: 1 }, { name: 'image', maxCount: 1 }]), async (req, res) => {
   try {
-    const audioBuffer = req.files['audio']?.[0]?.buffer;
-    const imageBuffer = req.files['image']?.[0]?.buffer;
-    const originalName = req.files['audio']?.[0]?.originalname || 'track.mp3';
-
-    if (!audioBuffer) return res.status(400).json({ message: "Fichier audio manquant" });
+    const audioBuf = req.files['audio']?.[0]?.buffer;
+    const imgBuf = req.files['image']?.[0]?.buffer;
+    const origName = req.files['audio']?.[0]?.originalname || 'track.mp3';
+    if (!audioBuf) return res.status(400).json({ message: 'Fichier audio manquant' });
 
     const isArtist = req.user.role === 'artist';
     const artisteId = isArtist ? req.user.id : (req.body.artisteId || null);
-    let artisteName = "Artiste Local";
-    if (isArtist) {
-      artisteName = req.user.nom;
-    } else if (artisteId) {
-      const artist = await Artist.findById(artisteId);
-      if (artist) artisteName = artist.nom;
-    }
+    let artisteName = 'Artiste Local';
+    if (isArtist) artisteName = req.user.nom;
+    else if (artisteId) { const a = await Artist.findById(artisteId); if (a) artisteName = a.nom; }
 
-    // 1. Upload audio vers Cloudinary (resource_type: 'video' = audio aussi)
-    const audioResult = await uploadBuffer(audioBuffer, {
-      resource_type: 'video',
-      folder: 'moozik/audio',
-      public_id: `audio_${Date.now()}`,
-      format: 'mp3',
-    });
-
-    // 2. Upload image (ou fallback dicebear)
-    let imageUrl = `https://api.dicebear.com/7.x/shapes/svg?seed=${audioResult.public_id}`;
-    let imagePublicId = '';
-    if (imageBuffer) {
-      const imgResult = await uploadBuffer(imageBuffer, {
-        resource_type: 'image',
-        folder: 'moozik/images',
-        public_id: `img_${Date.now()}`,
-        transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }],
-      });
-      imageUrl = imgResult.secure_url;
-      imagePublicId = imgResult.public_id;
+    const audioResult = await toCloud(audioBuf, { folder: 'moozik/audio', resource_type: 'video', format: 'mp3' });
+    let imageUrl = `https://api.dicebear.com/7.x/shapes/svg?seed=${audioResult.public_id}`, imagePublicId = '';
+    if (imgBuf) {
+      const ir = await toCloud(imgBuf, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }] });
+      imageUrl = ir.secure_url; imagePublicId = ir.public_id;
     }
 
     const count = await Song.countDocuments();
-    const newSong = new Song({
-      titre: req.body.titre || originalName.replace(/\.(mp3|mpeg)$/i, '').replace(/_/g, ' '),
-      artiste: artisteName,
-      artisteId: artisteId || null,
-      albumId: req.body.albumId || null,
-      src: audioResult.secure_url,        // ← URL Cloudinary directe, pas /uploads/
-      audioPublicId: audioResult.public_id,
-      image: imageUrl,
-      imagePublicId,
-      ordre: count
-    });
-    await newSong.save();
-    res.json(newSong);
-  } catch (err) {
-    console.error('Upload error:', err);
-    res.status(500).json({ message: err.message });
-  }
+    res.json(await new Song({
+      titre: req.body.titre || origName.replace(/\.(mp3|mpeg)$/i, '').replace(/_/g, ' '),
+      artiste: artisteName, artisteId: artisteId || null, albumId: req.body.albumId || null,
+      src: audioResult.secure_url, audioPublicId: audioResult.public_id,
+      image: imageUrl, imagePublicId, ordre: count
+    }).save());
+  } catch (e) { console.error('Upload error:', e); res.status(500).json({ message: e.message }); }
 });
 
+// Track play — also log per-user if authenticated
 app.put('/songs/:id/play', async (req, res) => {
   try {
     const song = await Song.findByIdAndUpdate(req.params.id, { $inc: { plays: 1 } }, { new: true });
+    // Log user play if token provided
+    const t = req.headers.authorization?.split(' ')[1];
+    if (t) {
+      try {
+        const d = jwt.verify(t, process.env.JWT_SECRET);
+        if (d.role === 'user') {
+          await UserPlay.findOneAndUpdate(
+            { userId: d.id, songId: req.params.id },
+            { $inc: { count: 1 } },
+            { upsert: true, new: true }
+          );
+        }
+      } catch {}
+    }
     res.json({ plays: song.plays });
-  } catch (err) { res.status(500).json(err); }
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.delete('/songs/:id', requireAdminOrArtist, async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
-    if (!song) return res.status(404).send("Introuvable");
-    if (req.user.role === 'artist' && String(song.artisteId) !== String(req.user.id)) {
-      return res.status(403).json({ message: "Vous ne pouvez supprimer que vos propres musiques" });
-    }
-    // Supprimer les fichiers sur Cloudinary
-    await destroyCloudinary(song.audioPublicId, 'video');
-    await destroyCloudinary(song.imagePublicId, 'image');
-    // Nettoyer commentaires et réactions
+    if (!song) return res.status(404).json({ message: 'Introuvable' });
+    if (req.user.role === 'artist' && String(song.artisteId) !== String(req.user.id)) return res.status(403).json({ message: 'Accès refusé' });
+    await fromCloud(song.audioPublicId, 'video');
+    await fromCloud(song.imagePublicId, 'image');
     await Comment.deleteMany({ songId: req.params.id });
     await Reaction.deleteMany({ songId: req.params.id });
+    await UserPlay.deleteMany({ songId: req.params.id });
     await Song.findByIdAndDelete(req.params.id);
-    res.json({ message: "Supprimé avec succès" });
-  } catch (err) { res.status(500).json(err); }
+    res.json({ message: 'Supprimé' });
+  } catch (e) { res.status(500).json(e); }
 });
 
-app.put('/songs/:id', requireAdminOrArtist, uploadImage.single('image'), async (req, res) => {
+app.put('/songs/:id', requireAdminOrArtist, upload.single('image'), async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
-    if (!song) return res.status(404).send("Introuvable");
-    if (req.user.role === 'artist' && String(song.artisteId) !== String(req.user.id)) {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
-    const update = {};
-    if (req.body.titre) update.titre = req.body.titre;
-    if (req.body.artiste && req.user.role === 'admin') update.artiste = req.body.artiste;
-    if (req.body.artisteId && req.user.role === 'admin') update.artisteId = req.body.artisteId;
-    if (req.body.albumId !== undefined) update.albumId = req.body.albumId || null;
+    if (!song) return res.status(404).json({ message: 'Introuvable' });
+    if (req.user.role === 'artist' && String(song.artisteId) !== String(req.user.id)) return res.status(403).json({ message: 'Accès refusé' });
+    const u = {};
+    if (req.body.titre) u.titre = req.body.titre;
+    if (req.body.artiste && req.user.role === 'admin') u.artiste = req.body.artiste;
+    if (req.body.artisteId && req.user.role === 'admin') u.artisteId = req.body.artisteId;
+    if (req.body.albumId !== undefined) u.albumId = req.body.albumId || null;
     if (req.file) {
-      await destroyCloudinary(song.imagePublicId);
-      update.image = req.file.path;
-      update.imagePublicId = req.file.filename;
+      await fromCloud(song.imagePublicId);
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: [{ width: 800, height: 800, crop: 'limit', quality: 'auto' }] });
+      u.image = r.secure_url; u.imagePublicId = r.public_id;
     }
-    const updated = await Song.findByIdAndUpdate(req.params.id, update, { new: true });
-    res.json(updated);
-  } catch (err) { res.status(500).json(err); }
+    res.json(await Song.findByIdAndUpdate(req.params.id, u, { new: true }));
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.put('/songs/:id/like', async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
-    if (!song) return res.status(404).send("Introuvable");
-    song.liked = !song.liked;
-    await song.save();
-    res.json(song);
-  } catch (err) { res.status(500).json(err); }
+    if (!song) return res.status(404).json({ message: 'Introuvable' });
+    song.liked = !song.liked; await song.save(); res.json(song);
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.put('/songs/reorder', requireAdmin, async (req, res) => {
   try {
     const { orderedIds } = req.body;
-    for (let i = 0; i < orderedIds.length; i++) {
-      await Song.findByIdAndUpdate(orderedIds[i], { ordre: i });
-    }
-    res.json({ message: "Ordre mis à jour" });
-  } catch (err) { res.status(500).json(err); }
+    for (let i = 0; i < orderedIds.length; i++) await Song.findByIdAndUpdate(orderedIds[i], { ordre: i });
+    res.json({ message: 'Ordre mis à jour' });
+  } catch (e) { res.status(500).json(e); }
 });
 
 app.get('/search', async (req, res) => {
   try {
-    const query = req.query.q;
-    const songs = await Song.find({
-      $or: [
-        { titre: { $regex: query, $options: 'i' } },
-        { artiste: { $regex: query, $options: 'i' } }
-      ]
-    });
-    res.json(songs);
-  } catch (err) { res.status(500).json(err); }
+    const q = req.query.q;
+    res.json(await Song.find({ $or: [{ titre: { $regex: q, $options: 'i' } }, { artiste: { $regex: q, $options: 'i' } }] }));
+  } catch (e) { res.status(500).json(e); }
 });
 
-// =====================
-// --- PLAYLISTS ADMIN ---
-// =====================
+// ── PLAYLISTS ADMIN ──────────────────────────
+
 app.get('/playlists', async (req, res) => {
-  try {
-    const playlists = await Playlist.find().populate('musiques');
-    res.json(playlists);
-  } catch (err) { res.status(500).json(err); }
+  try { res.json(await Playlist.find().populate('musiques')); }
+  catch (e) { res.status(500).json(e); }
 });
-
 app.post('/playlists', requireAdmin, async (req, res) => {
-  try {
-    const playlist = new Playlist({ nom: req.body.nom, musiques: [] });
-    await playlist.save();
-    res.json(playlist);
-  } catch (err) { res.status(500).json(err); }
+  try { res.json(await new Playlist({ nom: req.body.nom, musiques: [] }).save()); }
+  catch (e) { res.status(500).json(e); }
 });
-
 app.delete('/playlists/:id', requireAdmin, async (req, res) => {
-  try {
-    await Playlist.findByIdAndDelete(req.params.id);
-    res.json({ message: "Playlist supprimée" });
-  } catch (err) { res.status(500).json(err); }
+  try { await Playlist.findByIdAndDelete(req.params.id); res.json({ message: 'Supprimée' }); }
+  catch (e) { res.status(500).json(e); }
+});
+app.post('/playlists/:pid/add/:sid', requireAdmin, async (req, res) => {
+  try { const p = await Playlist.findById(req.params.pid); if (!p) return res.status(404).json({}); p.musiques.addToSet(req.params.sid); res.json(await p.save()); }
+  catch (e) { res.status(500).json(e); }
+});
+app.delete('/playlists/:pid/remove/:sid', requireAdmin, async (req, res) => {
+  try { const p = await Playlist.findById(req.params.pid); p.musiques = p.musiques.filter(id => String(id) !== req.params.sid); res.json(await p.save()); }
+  catch (e) { res.status(500).json(e); }
 });
 
-app.post('/playlists/:playlistId/add/:songId', requireAdmin, async (req, res) => {
-  try {
-    const playlist = await Playlist.findById(req.params.playlistId);
-    if (!playlist) return res.status(404).send("Playlist introuvable");
-    playlist.musiques.addToSet(req.params.songId);
-    await playlist.save();
-    res.json(playlist);
-  } catch (err) { res.status(500).json(err); }
-});
+// ── USER PLAYLISTS ───────────────────────────
 
-app.delete('/playlists/:playlistId/remove/:songId', requireAdmin, async (req, res) => {
-  try {
-    const playlist = await Playlist.findById(req.params.playlistId);
-    playlist.musiques = playlist.musiques.filter(id => String(id) !== req.params.songId);
-    await playlist.save();
-    res.json(playlist);
-  } catch (err) { res.status(500).json(err); }
-});
-
-// =====================
-// --- USER PLAYLISTS ---
-// =====================
 app.post('/user-playlists', requireAuth, async (req, res) => {
   try {
     const { nom, isPublic } = req.body;
-    if (!nom) return res.status(400).json({ message: "Nom requis" });
-    const playlist = new UserPlaylist({
-      nom, userId: req.user.id, musiques: [],
-      isPublic: isPublic === true || isPublic === 'true'
-    });
-    await playlist.save();
-    res.json(playlist);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    if (!nom) return res.status(400).json({ message: 'Nom requis' });
+    res.json(await new UserPlaylist({ nom, userId: req.user.id, musiques: [], isPublic: isPublic === true || isPublic === 'true' }).save());
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 app.get('/user-playlists/mine', requireAuth, async (req, res) => {
-  try {
-    const playlists = await UserPlaylist.find({ userId: req.user.id }).populate('musiques').sort({ createdAt: -1 });
-    res.json(playlists);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  try { res.json(await UserPlaylist.find({ userId: req.user.id }).populate('musiques').sort({ createdAt: -1 })); }
+  catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 app.get('/user-playlists/public', async (req, res) => {
-  try {
-    const playlists = await UserPlaylist.find({ isPublic: true }).populate('musiques').populate('userId', 'nom').sort({ createdAt: -1 });
-    res.json(playlists);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+  try { res.json(await UserPlaylist.find({ isPublic: true }).populate('musiques').populate('userId', 'nom').sort({ createdAt: -1 })); }
+  catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 app.get('/user-playlists/:id', async (req, res) => {
   try {
-    const playlist = await UserPlaylist.findById(req.params.id).populate('musiques');
-    if (!playlist) return res.status(404).json({ message: "Playlist introuvable" });
-    if (playlist.isPublic) return res.json(playlist);
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) return res.status(403).json({ message: "Cette playlist est privée" });
+    const p = await UserPlaylist.findById(req.params.id).populate('musiques');
+    if (!p) return res.status(404).json({ message: 'Introuvable' });
+    if (p.isPublic) return res.json(p);
+    const t = req.headers.authorization?.split(' ')[1];
+    if (!t) return res.status(403).json({ message: 'Playlist privée' });
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const isOwner = String(playlist.userId) === String(decoded.id);
-      const isAdminUser = decoded.role === 'admin';
-      if (!isOwner && !isAdminUser) return res.status(403).json({ message: "Accès refusé" });
-      return res.json(playlist);
-    } catch { return res.status(403).json({ message: "Token invalide" }); }
-  } catch (err) { res.status(500).json({ message: err.message }); }
+      const d = jwt.verify(t, process.env.JWT_SECRET);
+      if (String(p.userId) !== String(d.id) && d.role !== 'admin') return res.status(403).json({ message: 'Accès refusé' });
+      res.json(p);
+    } catch { res.status(403).json({ message: 'Token invalide' }); }
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-app.post('/user-playlists/:id/add/:songId', requireAuth, async (req, res) => {
+app.post('/user-playlists/:id/add/:sid', requireAuth, async (req, res) => {
   try {
-    const playlist = await UserPlaylist.findById(req.params.id);
-    if (!playlist) return res.status(404).json({ message: "Playlist introuvable" });
-    if (String(playlist.userId) !== String(req.user.id) && req.user.role !== 'admin') {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
-    playlist.musiques.addToSet(req.params.songId);
-    await playlist.save();
-    res.json(playlist);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    const p = await UserPlaylist.findById(req.params.id);
+    if (!p) return res.status(404).json({ message: 'Introuvable' });
+    if (String(p.userId) !== String(req.user.id) && req.user.role !== 'admin') return res.status(403).json({ message: 'Accès refusé' });
+    p.musiques.addToSet(req.params.sid); res.json(await p.save());
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-app.delete('/user-playlists/:id/remove/:songId', requireAuth, async (req, res) => {
+app.delete('/user-playlists/:id/remove/:sid', requireAuth, async (req, res) => {
   try {
-    const playlist = await UserPlaylist.findById(req.params.id);
-    if (!playlist) return res.status(404).json({ message: "Playlist introuvable" });
-    if (String(playlist.userId) !== String(req.user.id) && req.user.role !== 'admin') {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
-    playlist.musiques = playlist.musiques.filter(id => String(id) !== req.params.songId);
-    await playlist.save();
-    res.json(playlist);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    const p = await UserPlaylist.findById(req.params.id);
+    if (!p) return res.status(404).json({ message: 'Introuvable' });
+    if (String(p.userId) !== String(req.user.id) && req.user.role !== 'admin') return res.status(403).json({ message: 'Accès refusé' });
+    p.musiques = p.musiques.filter(id => String(id) !== req.params.sid); res.json(await p.save());
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 app.put('/user-playlists/:id/visibility', requireAuth, async (req, res) => {
   try {
-    const playlist = await UserPlaylist.findById(req.params.id);
-    if (!playlist) return res.status(404).json({ message: "Playlist introuvable" });
-    if (String(playlist.userId) !== String(req.user.id) && req.user.role !== 'admin') {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
-    playlist.isPublic = req.body.isPublic;
-    await playlist.save();
-    res.json(playlist);
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    const p = await UserPlaylist.findById(req.params.id);
+    if (!p) return res.status(404).json({ message: 'Introuvable' });
+    if (String(p.userId) !== String(req.user.id) && req.user.role !== 'admin') return res.status(403).json({ message: 'Accès refusé' });
+    p.isPublic = req.body.isPublic; res.json(await p.save());
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 app.delete('/user-playlists/:id', requireAuth, async (req, res) => {
   try {
-    const playlist = await UserPlaylist.findById(req.params.id);
-    if (!playlist) return res.status(404).json({ message: "Playlist introuvable" });
-    if (String(playlist.userId) !== String(req.user.id) && req.user.role !== 'admin') {
-      return res.status(403).json({ message: "Accès refusé" });
-    }
-    await UserPlaylist.findByIdAndDelete(req.params.id);
-    res.json({ message: "Playlist supprimée" });
-  } catch (err) { res.status(500).json({ message: err.message }); }
+    const p = await UserPlaylist.findById(req.params.id);
+    if (!p) return res.status(404).json({ message: 'Introuvable' });
+    if (String(p.userId) !== String(req.user.id) && req.user.role !== 'admin') return res.status(403).json({ message: 'Accès refusé' });
+    await UserPlaylist.findByIdAndDelete(req.params.id); res.json({ message: 'Supprimée' });
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// =====================
-// --- STATS ADMIN ---
-// =====================
+// ── STATS ADMIN ──────────────────────────────
+
 app.get('/admin/stats', requireAdmin, async (req, res) => {
   try {
-    const totalSongs = await Song.countDocuments();
-    const totalPlaylists = await Playlist.countDocuments();
-    const totalArtists = await Artist.countDocuments();
-    const totalAlbums = await Album.countDocuments();
-    const totalUsers = await User.countDocuments();
-    const totalUserPlaylists = await UserPlaylist.countDocuments();
-    const totalComments = await Comment.countDocuments();
-    const totalPlays = await Song.aggregate([{ $group: { _id: null, total: { $sum: '$plays' } } }]);
-    const totalLikes = await Song.countDocuments({ liked: true });
-    const topSongs = await Song.find().sort({ plays: -1 }).limit(5).select('titre artiste plays image');
+    const [totalSongs, totalPlaylists, totalArtists, totalAlbums, totalUsers,
+      totalUserPlaylists, totalComments, totalLikes, topSongs, playsAgg] = await Promise.all([
+      Song.countDocuments(), Playlist.countDocuments(), Artist.countDocuments(),
+      Album.countDocuments(), User.countDocuments(), UserPlaylist.countDocuments(),
+      Comment.countDocuments(), Song.countDocuments({ liked: true }),
+      Song.find().sort({ plays: -1 }).limit(5).select('titre artiste plays image'),
+      Song.aggregate([{ $group: { _id: null, total: { $sum: '$plays' } } }])
+    ]);
     res.json({
       totalSongs, totalPlaylists, totalArtists, totalAlbums, totalUsers,
-      totalUserPlaylists, totalComments,
-      totalPlays: totalPlays[0]?.total || 0,
-      totalLikes, topSongs
+      totalUserPlaylists, totalComments, totalLikes, topSongs,
+      totalPlays: playsAgg[0]?.total || 0
     });
-  } catch (err) { res.status(500).json(err); }
+  } catch (e) { res.status(500).json(e); }
 });
 
-// =====================
-// --- SERVEUR ---
-// =====================
+// ── SERVEUR ──────────────────────────────────
+
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Serveur en ligne sur le port ${PORT}`);
-});
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Serveur sur le port ${PORT}`));
