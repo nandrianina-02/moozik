@@ -841,4 +841,81 @@ app.get('/admin/stats', requireAdmin, async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => console.log(`🚀 Serveur sur le port ${PORT}`));
+const server = require('http').createServer(app);
+server.listen(PORT, '0.0.0.0', () => console.log(`🚀 Serveur sur le port ${PORT}`));
+
+const { WebSocketServer } = require('ws');
+ 
+const wss = new WebSocketServer({ server });
+ 
+// Map token → { ws, nom, avatar, songId, songTitle, artiste, image, lastSeen }
+const listeners = new Map();
+ 
+// Nettoie les connexions mortes toutes les 30s
+const cleanupInterval = setInterval(() => {
+  listeners.forEach((v, k) => {
+    if (v.ws.readyState !== 1) listeners.delete(k);
+  });
+}, 30_000);
+ 
+function broadcast() {
+  const users = [...listeners.values()].map(l => ({
+    nom:       l.nom,
+    avatar:    l.avatar,
+    songId:    l.songId,
+    songTitle: l.songTitle,
+    artiste:   l.artiste,
+    image:     l.image,
+  }));
+  const payload = JSON.stringify({ type: 'listeners', users });
+  wss.clients.forEach(c => { if (c.readyState === 1) c.send(payload); });
+}
+ 
+wss.on('connection', (ws, req) => {
+  ws.on('message', (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+ 
+    if (msg.type === 'join') {
+      // Vérification optionnelle du token JWT
+      let nom = 'Anonyme', avatar = null;
+      try {
+        const decoded = jwt.verify(msg.token, process.env.JWT_SECRET);
+        nom    = decoded.nom    || decoded.email || 'Utilisateur';
+        avatar = decoded.avatar || null;
+      } catch {
+        // Token invalide → on laisse passer en anonyme ou on refuse
+        // Pour refuser : ws.close(); return;
+      }
+ 
+      listeners.set(msg.token, {
+        ws, nom, avatar,
+        songId:    msg.songId,
+        songTitle: msg.songTitle,
+        artiste:   msg.artiste,
+        image:     msg.image,
+        lastSeen:  Date.now(),
+      });
+      broadcast();
+    }
+ 
+    if (msg.type === 'leave') {
+      listeners.delete(msg.token);
+      broadcast();
+    }
+ 
+    if (msg.type === 'ping') {
+      // Maintenir la connexion active
+      const entry = listeners.get(msg.token);
+      if (entry) entry.lastSeen = Date.now();
+      ws.send(JSON.stringify({ type: 'pong' }));
+    }
+  });
+ 
+  ws.on('close', () => {
+    listeners.forEach((v, k) => { if (v.ws === ws) listeners.delete(k); });
+    broadcast();
+  });
+ 
+  ws.on('error', () => ws.close());
+});
