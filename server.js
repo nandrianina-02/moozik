@@ -101,6 +101,13 @@ const UserPlaySchema = new mongoose.Schema({
 UserPlaySchema.index({ userId: 1, songId: 1 }, { unique: true });
 const UserPlay = mongoose.model('UserPlay', UserPlaySchema);
 
+const UserFavoriteSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  songId: { type: mongoose.Schema.Types.ObjectId, ref: 'Song', required: true },
+}, { timestamps: true });
+UserFavoriteSchema.index({ userId: 1, songId: 1 }, { unique: true });
+const UserFavorite = mongoose.model('UserFavorite', UserFavoriteSchema);
+
 const HistorySchema = new mongoose.Schema({
   userId:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   songId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Song', required: true },
@@ -301,7 +308,13 @@ app.post('/users/login', async (req, res) => {
     res.json({ token, email: user.email, nom: user.nom, role: 'user', userId: user._id, avatar: user.avatar || '' });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
-app.get('/users/verify', requireAuth, (req, res) => res.json({ valid: true, ...req.user }));
+app.get('/users/verify', requireAuth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('-password');
+    if (!user) return res.json({ valid: false });
+    res.json({ valid: true, ...req.user, avatar: user.avatar || '', nom: user.nom || req.user.nom });
+  } catch { res.json({ valid: true, ...req.user }); }
+});
 app.put('/users/:id', requireAuth, upload.single('avatar'), async (req, res) => {
   try {
     if (String(req.user.id) !== String(req.params.id) && req.user.role !== 'admin') return res.status(403).json({ message: 'Accès refusé' });
@@ -332,10 +345,48 @@ app.put('/users/:id/password', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
+// ── PROFIL PUBLIC UTILISATEUR ───────────────
+app.get('/users/:id/profile', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select('nom avatar role createdAt');
+    if (!user) return res.status(404).json({ message: 'Introuvable' });
+    res.json(user);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+app.get('/users/:id/playlists', async (req, res) => {
+  try {
+    const playlists = await UserPlaylist.find({ userId: req.params.id, isPublic: true })
+      .populate('musiques', 'titre artiste image src plays')
+      .sort({ createdAt: -1 });
+    res.json(playlists.map(p => ({ ...p.toObject(), songs: p.musiques })));
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+app.get('/users/:id/favorites', async (req, res) => {
+  try {
+    const favs = await UserFavorite.find({ userId: req.params.id }).select('songId');
+    const songs = await Song.find({ _id: { $in: favs.map(f => f.songId) } })
+      .select('-audioPublicId -imagePublicId -__v');
+    res.json(songs.map(s => ({ ...s.toObject(), liked: true })));
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
 // ── AUTH ARTISTE ─────────────────────────────
-app.post('/artists', requireAdmin, async (req, res) => {
-  try { const { nom, bio, email, password } = req.body; res.json(await new Artist({ nom, bio: bio || '', email, password: password ? await bcrypt.hash(password, 12) : null }).save()); }
-  catch (e) { res.status(500).json(e); }
+app.post('/artists', requireAdmin, upload.single('image'), async (req, res) => {
+  try {
+    const { nom, bio, email, password } = req.body;
+    if (!nom?.trim()) return res.status(400).json({ message: 'Nom requis' });
+    let imageUrl = '', imagePublicId = '';
+    if (req.file) {
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
+      imageUrl = r.secure_url; imagePublicId = r.public_id;
+    }
+    const artist = await new Artist({
+      nom: nom.trim(), bio: bio || '', email: email || undefined,
+      password: password ? await bcrypt.hash(password, 12) : null,
+      image: imageUrl, imagePublicId
+    }).save();
+    res.json(artist);
+  } catch (e) { res.status(500).json(e); }
 });
 app.post('/artists/login', async (req, res) => {
   try {
@@ -360,11 +411,20 @@ app.get('/artists/:id', async (req, res) => {
     res.json({ artist, songs });
   } catch (e) { res.status(500).json(e); }
 });
-app.put('/artists/:id', requireAdmin, upload.single('image'), async (req, res) => {
+app.put('/artists/:id', requireAdminOrArtist, upload.single('image'), async (req, res) => {
   try {
+    // Seul l'artiste lui-même ou un admin peut modifier
+    if (req.user.role === 'artist' && String(req.user.id) !== String(req.params.id))
+      return res.status(403).json({ message: 'Accès refusé' });
     const update = {};
-    if (req.body.nom) update.nom = req.body.nom; if (req.body.bio !== undefined) update.bio = req.body.bio;
-    if (req.file) { const old = await Artist.findById(req.params.id); await fromCloud(old?.imagePublicId); const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM }); update.image = r.secure_url; update.imagePublicId = r.public_id; }
+    if (req.body.nom) update.nom = req.body.nom;
+    if (req.body.bio !== undefined) update.bio = req.body.bio;
+    if (req.file) {
+      const existing = await Artist.findById(req.params.id);
+      await fromCloud(existing?.imagePublicId);
+      const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
+      update.image = r.secure_url; update.imagePublicId = r.public_id;
+    }
     res.json(await Artist.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password'));
   } catch (e) { res.status(500).json(e); }
 });
@@ -568,8 +628,21 @@ app.get('/songs', async (req, res) => {
       Song.find(filter).sort({ ordre:1, createdAt:-1 }).skip((page-1)*limit).limit(limit).select('-audioPublicId -imagePublicId -__v').populate('artisteId','nom image'),
       Song.countDocuments(filter)
     ]);
-    res.set('Cache-Control','public, max-age=30');
-    res.json({ songs, pagination: { page, limit, total, pages: Math.ceil(total/limit) } });
+    // Injecter liked par utilisateur connecté
+    let likedSet = new Set();
+    const t = req.headers.authorization?.split(' ')[1];
+    if (t) {
+      try {
+        const d = jwt.verify(t, process.env.JWT_SECRET);
+        if (d.id) {
+          const favs = await UserFavorite.find({ userId: d.id }).select('songId');
+          favs.forEach(f => likedSet.add(String(f.songId)));
+        }
+      } catch {}
+    }
+    const songsWithLike = songs.map(s => ({ ...s.toObject(), liked: likedSet.has(String(s._id)) }));
+    res.set('Cache-Control','no-store');
+    res.json({ songs: songsWithLike, pagination: { page, limit, total, pages: Math.ceil(total/limit) } });
   } catch (e) { res.status(500).json(e); }
 });
 app.post('/upload', requireAdminOrArtist, upload.fields([{ name:'audio', maxCount:1 },{ name:'image', maxCount:1 }]), async (req, res) => {
@@ -635,9 +708,29 @@ app.put('/songs/:id', requireAdminOrArtist, upload.single('image'), async (req, 
     res.json(await Song.findByIdAndUpdate(req.params.id, u, { new:true }));
   } catch (e) { res.status(500).json(e); }
 });
-app.put('/songs/:id/like', async (req, res) => {
-  try { const song = await Song.findById(req.params.id); if (!song) return res.status(404).json({ message:'Introuvable' }); song.liked = !song.liked; await song.save(); res.json(song); }
-  catch (e) { res.status(500).json(e); }
+// ── FAVORIS PAR UTILISATEUR ──────────────────
+app.put('/songs/:id/like', requireAuth, async (req, res) => {
+  try {
+    const song = await Song.findById(req.params.id);
+    if (!song) return res.status(404).json({ message:'Introuvable' });
+    const userId = req.user.id;
+    const existing = await UserFavorite.findOne({ userId, songId: req.params.id });
+    if (existing) {
+      await UserFavorite.deleteOne({ _id: existing._id });
+    } else {
+      await new UserFavorite({ userId, songId: req.params.id }).save();
+    }
+    const liked = !existing;
+    res.json({ ...song.toObject(), liked });
+  } catch (e) { res.status(500).json(e); }
+});
+app.get('/songs/favorites', requireAuth, async (req, res) => {
+  try {
+    const favs = await UserFavorite.find({ userId: req.user.id }).select('songId');
+    const songIds = favs.map(f => f.songId);
+    const songs = await Song.find({ _id: { $in: songIds } }).select('-audioPublicId -imagePublicId -__v').populate('artisteId','nom image');
+    res.json(songs.map(s => ({ ...s.toObject(), liked: true })));
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 app.put('/songs/reorder', requireAdmin, async (req, res) => {
   try { const { orderedIds } = req.body; for (let i=0; i<orderedIds.length; i++) await Song.findByIdAndUpdate(orderedIds[i], { ordre:i }); res.json({ message:'Ordre mis à jour' }); }
@@ -827,16 +920,86 @@ app.delete('/user-playlists/:id', requireAuth, async (req, res) => {
   try { const p = await UserPlaylist.findById(req.params.id); if (!p) return res.status(404).json({ message:'Introuvable' }); if (String(p.userId) !== String(req.user.id) && req.user.role !== 'admin') return res.status(403).json({ message:'Accès refusé' }); await UserPlaylist.findByIdAndDelete(req.params.id); res.json({ message:'Supprimée' }); } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
+// ── ADMIN: SONGS MANAGEMENT ─────────────────
+app.get('/admin/songs', requireAdmin, async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page)||1);
+    const limit = Math.min(50, parseInt(req.query.limit)||20);
+    const filter = {};
+    if (req.query.q) { const re = new RegExp(req.query.q,'i'); filter.$or = [{ titre: re },{ artiste: re }]; }
+    if (req.query.artisteId) filter.artisteId = req.query.artisteId;
+    if (req.query.albumId) filter.albumId = req.query.albumId;
+    const [songs, total] = await Promise.all([
+      Song.find(filter).sort({ plays:-1, createdAt:-1 }).skip((page-1)*limit).limit(limit)
+        .select('-audioPublicId -__v').populate('artisteId','nom').populate('albumId','titre'),
+      Song.countDocuments(filter)
+    ]);
+    res.json({ songs, pagination: { page, limit, total, pages: Math.ceil(total/limit) } });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+app.get('/admin/albums', requireAdmin, async (req, res) => {
+  try {
+    const albums = await Album.find().sort({ createdAt:-1 }).populate('artisteId','nom');
+    res.json(albums);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
 // ── STATS ADMIN ──────────────────────────────
+// Extended stats endpoints
+app.get('/admin/stats/plays-history', requireAdmin, async (req, res) => {
+  try {
+    const period = req.query.period || '7d';
+    const days = period === '90d' ? 90 : period === '30d' ? 30 : 7;
+    const since = new Date(Date.now() - days * 86400000);
+    const data = await History.aggregate([
+      { $match: { playedAt: { $gte: since } } },
+      { $group: { _id: { $dateToString: { format:'%Y-%m-%d', date:'$playedAt' } }, plays: { $sum:1 } } },
+      { $sort: { _id:1 } }, { $project: { date:'$_id', plays:1, _id:0 } }
+    ]);
+    res.json(data);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+app.get('/admin/stats/top-songs', requireAdmin, async (req, res) => {
+  try {
+    const limit = Math.min(20, parseInt(req.query.limit)||10);
+    res.json(await Song.find().sort({ plays:-1 }).limit(limit).select('titre artiste plays image'));
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+app.get('/admin/stats/top-artists', requireAdmin, async (req, res) => {
+  try {
+    const limit = Math.min(10, parseInt(req.query.limit)||6);
+    const data = await Song.aggregate([
+      { $group: { _id:'$artiste', plays:{ $sum:'$plays' }, artisteId:{ $first:'$artisteId' } } },
+      { $sort: { plays:-1 } }, { $limit: limit },
+      { $project: { nom:'$_id', plays:1, artisteId:1, _id:0 } }
+    ]);
+    res.json(data);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+app.get('/admin/stats/users-growth', requireAdmin, async (req, res) => {
+  try {
+    const data = await User.aggregate([
+      { $group: { _id: { $dateToString: { format:'%Y-%m-%d', date:'$createdAt' } }, users:{ $sum:1 } } },
+      { $sort: { _id:1 } }, { $limit:30 }, { $project: { date:'$_id', users:1, _id:0 } }
+    ]);
+    res.json(data);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
 app.get('/admin/stats', requireAdmin, async (req, res) => {
   try {
-    const [totalSongs, totalPlaylists, totalArtists, totalAlbums, totalUsers, totalUserPlaylists, totalComments, totalLikes, topSongs, playsAgg] = await Promise.all([
+    const weekAgo = new Date(Date.now() - 7*86400000);
+    const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+    const [totalSongs, totalPlaylists, totalArtists, totalAlbums, totalUsers, totalUserPlaylists, totalComments, totalFavorites, topSongs, playsAgg, newUsersThisWeek, playsToday] = await Promise.all([
       Song.countDocuments(), Playlist.countDocuments(), Artist.countDocuments(), Album.countDocuments(),
-      User.countDocuments(), UserPlaylist.countDocuments(), Comment.countDocuments(), Song.countDocuments({ liked:true }),
+      User.countDocuments(), UserPlaylist.countDocuments(), Comment.countDocuments(),
+      UserFavorite.countDocuments(),
       Song.find().sort({ plays:-1 }).limit(5).select('titre artiste plays image'),
-      Song.aggregate([{ $group: { _id:null, total: { $sum:'$plays' } } }])
+      Song.aggregate([{ $group: { _id:null, total: { $sum:'$plays' } } }]),
+      User.countDocuments({ createdAt: { $gte: weekAgo } }),
+      History.countDocuments({ playedAt: { $gte: todayStart } })
     ]);
-    res.json({ totalSongs, totalPlaylists, totalArtists, totalAlbums, totalUsers, totalUserPlaylists, totalComments, totalLikes, topSongs, totalPlays: playsAgg[0]?.total||0 });
+    res.json({ totalSongs, totalPlaylists, totalArtists, totalAlbums, totalUsers, totalUserPlaylists, totalComments, totalLikes: totalFavorites, topSongs, totalPlays: playsAgg[0]?.total||0, newUsersThisWeek, playsToday });
   } catch (e) { res.status(500).json(e); }
 });
 
