@@ -635,10 +635,26 @@ app.put('/songs/:id', requireAdminOrArtist, upload.single('image'), async (req, 
     res.json(await Song.findByIdAndUpdate(req.params.id, u, { new:true }));
   } catch (e) { res.status(500).json(e); }
 });
-app.put('/songs/:id/like', async (req, res) => {
-  try { const song = await Song.findById(req.params.id); if (!song) return res.status(404).json({ message:'Introuvable' }); song.liked = !song.liked; await song.save(); res.json(song); }
-  catch (e) { res.status(500).json(e); }
+
+app.put('/songs/:id/like', requireAuth, async (req, res) => {
+  try {
+    const songId = req.params.id;
+    const userId = req.user.id; // Récupéré via le token JWT
+
+    const existing = await Reaction.findOne({ songId, userId, type: 'heart' });
+    
+    if (existing) {
+      await Reaction.deleteOne({ _id: existing._id });
+      return res.json({ songId, liked: false });
+    } else {
+      await new Reaction({ songId, userId, type: 'heart' }).save();
+      return res.json({ songId, liked: true });
+    }
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
 });
+
 app.put('/songs/reorder', requireAdmin, async (req, res) => {
   try { const { orderedIds } = req.body; for (let i=0; i<orderedIds.length; i++) await Song.findByIdAndUpdate(orderedIds[i], { ordre:i }); res.json({ message:'Ordre mis à jour' }); }
   catch (e) { res.status(500).json(e); }
