@@ -664,6 +664,16 @@ app.get('/search', async (req, res) => {
   catch (e) { res.status(500).json(e); }
 });
 
+// Version plus sécurisée : on ne récupère que ses propres likes
+app.get('/reactions', requireAuth, async (req, res) => {
+  try {
+    const reactions = await Reaction.find({ userId: req.user.id });
+    res.json(reactions);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
 // ── PARTAGE ──────────────────────────────────
 app.post('/songs/:id/share', async (req, res) => {
   try {
