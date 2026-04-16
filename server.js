@@ -252,7 +252,7 @@ app.get('/admin/verify', requireAdmin, async (req, res) => {
 app.get('/admin/admins', requireAdmin, async (req, res) => {
   try {
     const me = await Admin.findById(req.admin.id);
-    if (!me?.isPrimary) return res.status(403).json({ message: 'Réservé à l'admin principal' });
+    if (!me?.isPrimary) return res.status(403).json({ message: `Réservé à l'admin principal` });
     res.json(await Admin.find().select('-password').sort({ createdAt: 1 }));
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
@@ -260,10 +260,10 @@ app.get('/admin/admins', requireAdmin, async (req, res) => {
 app.post('/admin/admins', requireAdmin, async (req, res) => {
   try {
     const me = await Admin.findById(req.admin.id);
-    if (!me?.isPrimary) return res.status(403).json({ message: 'Réservé à l'admin principal' });
+    if (!me?.isPrimary) return res.status(403).json({ message: `Réservé à l'admin principal` });
     const { email, password, nom } = req.body;
     if (!email || !password) return res.status(400).json({ message: 'Email et mot de passe requis' });
-    if (await Admin.findOne({ email })) return res.status(400).json({ message: 'Email déjà utilisé' });
+    if (await Admin.findOne({ email })) return res.status(400).json({ message: `Email déjà utilisé` });
     const admin = await new Admin({ email, password: await bcrypt.hash(password, 12), nom: nom || '', createdBy: req.admin.id }).save();
     res.json({ ...admin.toObject(), password: undefined });
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -272,7 +272,7 @@ app.post('/admin/admins', requireAdmin, async (req, res) => {
 app.put('/admin/admins/:id', requireAdmin, async (req, res) => {
   try {
     const me = await Admin.findById(req.admin.id);
-    if (!me?.isPrimary && String(req.admin.id) !== String(req.params.id)) return res.status(403).json({ message: 'Accès refusé' });
+    if (!me?.isPrimary && String(req.admin.id) !== String(req.params.id)) return res.status(403).json({ message: `Accès refusé` });
     const { nom, email, password } = req.body;
     const update = {};
     if (nom !== undefined) update.nom = nom;
@@ -286,10 +286,10 @@ app.put('/admin/admins/:id', requireAdmin, async (req, res) => {
 app.delete('/admin/admins/:id', requireAdmin, async (req, res) => {
   try {
     const me = await Admin.findById(req.admin.id);
-    if (!me?.isPrimary) return res.status(403).json({ message: 'Réservé à l'admin principal' });
-    if (String(req.params.id) === String(req.admin.id)) return res.status(400).json({ message: 'Impossible de se supprimer soi-même' });
+    if (!me?.isPrimary) return res.status(403).json({ message: `Réservé à l'admin principal` });
+    if (String(req.params.id) === String(req.admin.id)) return res.status(400).json({ message: `Impossible de se supprimer soi-même` });
     const target = await Admin.findById(req.params.id);
-    if (target?.isPrimary) return res.status(400).json({ message: 'Impossible de supprimer l'admin principal' });
+    if (target?.isPrimary) return res.status(400).json({ message: `Impossible de supprimer l'admin principal` });
     await Admin.findByIdAndDelete(req.params.id);
     res.json({ message: 'Admin supprimé' });
   } catch (e) { res.status(500).json({ message: e.message }); }
