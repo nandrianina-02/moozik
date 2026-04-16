@@ -127,6 +127,18 @@ const NotificationSchema = new mongoose.Schema({
 NotificationSchema.index({ userId: 1, lu: 1, createdAt: -1 });
 const Notification = mongoose.model('Notification', NotificationSchema);
 
+const ShareHistorySchema = new mongoose.Schema({
+  songId:    { type: mongoose.Schema.Types.ObjectId, ref: 'Song', required: true },
+  sharedBy:  { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  shareToken:{ type: String, required: true },
+  viewCount: { type: Number, default: 0 },
+  playCount: { type: Number, default: 0 },
+  expiresAt: { type: Date, required: true },
+}, { timestamps: true });
+ShareHistorySchema.index({ shareToken: 1 }, { unique: true });
+ShareHistorySchema.index({ sharedBy: 1, createdAt: -1 });
+const ShareHistory = mongoose.model('ShareHistory', ShareHistorySchema);
+
 const SongSchema = new mongoose.Schema({
   titre: String, artiste: String,
   artisteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Artist', default: null },
@@ -150,7 +162,12 @@ const UserPlaylistSchema = new mongoose.Schema({
 }, { timestamps: true });
 const UserPlaylist = mongoose.model('UserPlaylist', UserPlaylistSchema);
 
-const AdminSchema = new mongoose.Schema({ email: { type: String, unique: true }, password: String }, { timestamps: true });
+const AdminSchema = new mongoose.Schema({
+  email: { type: String, unique: true }, password: String,
+  nom: { type: String, default: '' }, role: { type: String, default: 'admin' },
+  isPrimary: { type: Boolean, default: false },
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null }
+}, { timestamps: true });
 const Admin = mongoose.model('Admin', AdminSchema);
 
 const UserSchema = new mongoose.Schema({
@@ -211,8 +228,9 @@ app.post('/admin/register', async (req, res) => {
     const { email, password, secret } = req.body;
     if (secret !== process.env.REGISTER_SECRET) return res.status(403).json({ message: 'Secret invalide' });
     if (await Admin.findOne({ email })) return res.status(400).json({ message: 'Admin déjà existant' });
-    await new Admin({ email, password: await bcrypt.hash(password, 12) }).save();
-    res.json({ message: 'Admin créé ✅' });
+    const isPrimary = (await Admin.countDocuments()) === 0;
+    await new Admin({ email, password: await bcrypt.hash(password, 12), isPrimary }).save();
+    res.json({ message: isPrimary ? 'Admin principal créé ✅' : 'Admin créé ✅' });
   } catch (e) { res.status(500).json(e); }
 });
 app.post('/admin/login', async (req, res) => {
@@ -224,7 +242,95 @@ app.post('/admin/login', async (req, res) => {
     res.json({ token, email: admin.email, role: 'admin' });
   } catch (e) { res.status(500).json(e); }
 });
-app.get('/admin/verify', requireAdmin, (req, res) => res.json({ valid: true, email: req.admin.email, role: 'admin' }));
+app.get('/admin/verify', requireAdmin, async (req, res) => {
+  try {
+    const admin = await Admin.findById(req.admin.id).select('-password');
+    res.json({ valid: true, email: req.admin.email, role: 'admin', nom: admin?.nom || '', isPrimary: admin?.isPrimary || false });
+  } catch { res.json({ valid: true, email: req.admin.email, role: 'admin' }); }
+});
+// Lister tous les admins (admin principal seulement)
+app.get('/admin/admins', requireAdmin, async (req, res) => {
+  try {
+    const me = await Admin.findById(req.admin.id);
+    if (!me?.isPrimary) return res.status(403).json({ message: 'Réservé à l'admin principal' });
+    res.json(await Admin.find().select('-password').sort({ createdAt: 1 }));
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+// Créer un nouvel admin (admin principal seulement)
+app.post('/admin/admins', requireAdmin, async (req, res) => {
+  try {
+    const me = await Admin.findById(req.admin.id);
+    if (!me?.isPrimary) return res.status(403).json({ message: 'Réservé à l'admin principal' });
+    const { email, password, nom } = req.body;
+    if (!email || !password) return res.status(400).json({ message: 'Email et mot de passe requis' });
+    if (await Admin.findOne({ email })) return res.status(400).json({ message: 'Email déjà utilisé' });
+    const admin = await new Admin({ email, password: await bcrypt.hash(password, 12), nom: nom || '', createdBy: req.admin.id }).save();
+    res.json({ ...admin.toObject(), password: undefined });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+// Modifier un admin (admin principal seulement)
+app.put('/admin/admins/:id', requireAdmin, async (req, res) => {
+  try {
+    const me = await Admin.findById(req.admin.id);
+    if (!me?.isPrimary && String(req.admin.id) !== String(req.params.id)) return res.status(403).json({ message: 'Accès refusé' });
+    const { nom, email, password } = req.body;
+    const update = {};
+    if (nom !== undefined) update.nom = nom;
+    if (email) update.email = email;
+    if (password && password.length >= 6) update.password = await bcrypt.hash(password, 12);
+    const updated = await Admin.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
+    res.json(updated);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+// Supprimer un admin (admin principal seulement, ne peut pas se supprimer lui-même)
+app.delete('/admin/admins/:id', requireAdmin, async (req, res) => {
+  try {
+    const me = await Admin.findById(req.admin.id);
+    if (!me?.isPrimary) return res.status(403).json({ message: 'Réservé à l'admin principal' });
+    if (String(req.params.id) === String(req.admin.id)) return res.status(400).json({ message: 'Impossible de se supprimer soi-même' });
+    const target = await Admin.findById(req.params.id);
+    if (target?.isPrimary) return res.status(400).json({ message: 'Impossible de supprimer l'admin principal' });
+    await Admin.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Admin supprimé' });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+// Recherche globale
+app.get('/search/global', async (req, res) => {
+  try {
+    const q = req.query.q;
+    if (!q || q.trim().length < 1) return res.json({ songs: [], artists: [], albums: [], playlists: [] });
+    const re = new RegExp(q.trim(), 'i');
+    const [songs, artists, albums, playlists] = await Promise.all([
+      Song.find({ $or: [{ titre: re }, { artiste: re }] }).limit(8).select('-audioPublicId -imagePublicId -__v').populate('artisteId','nom image'),
+      Artist.find({ nom: re }).limit(5).select('-password -imagePublicId -__v'),
+      Album.find({ $or: [{ titre: re }, { artiste: re }] }).limit(5).select('-imagePublicId -__v'),
+      UserPlaylist.find({ isPublic: true, nom: re }).limit(5).populate('userId','nom').select('-__v'),
+    ]);
+    res.json({ songs, artists, albums, playlists });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+// Utilisateurs actifs (dernières 15 minutes via websocket listeners)
+app.get('/admin/active-users', requireAdmin, async (req, res) => {
+  try {
+    const since = new Date(Date.now() - 15 * 60 * 1000);
+    const recentHistory = await History.aggregate([
+      { $match: { playedAt: { $gte: since } } },
+      { $group: { _id: '$userId' } },
+      { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'user' } },
+      { $unwind: '$user' },
+      { $project: { 'user.nom': 1, 'user.email': 1, 'user.avatar': 1, _id: 1 } }
+    ]);
+    res.json({ count: recentHistory.length, users: recentHistory.map(r => r.user) });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+// Musiques sans artiste assigné
+app.get('/admin/unassigned-songs', requireAdmin, async (req, res) => {
+  try {
+    const songs = await Song.find({ $or: [{ artisteId: null }, { artisteId: { $exists: false } }, { artiste: '' }] })
+      .select('titre artiste image createdAt').sort({ createdAt: -1 });
+    res.json({ count: songs.length, songs });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
 app.put('/admin/profile', requireAdmin, async (req, res) => {
   try { const { nom } = req.body; if (!nom?.trim()) return res.status(400).json({ message: 'Nom requis' }); res.json({ message: 'Profil mis à jour', nom: nom.trim() }); }
   catch (e) { res.status(500).json({ message: e.message }); }
@@ -681,6 +787,11 @@ app.put('/songs/:id/play', async (req, res) => {
         }
       } catch {}
     }
+    // Incrémenter aussi le compteur de partage si shareToken fourni
+    const shareToken = req.body?.shareToken || req.query?.shareToken;
+    if (shareToken) {
+      await ShareHistory.findOneAndUpdate({ shareToken }, { $inc: { playCount: 1 } }).catch(() => {});
+    }
     res.json({ plays: song.plays });
   } catch (e) { res.status(500).json(e); }
 });
@@ -746,8 +857,18 @@ app.post('/songs/:id/share', async (req, res) => {
   try {
     const song = await Song.findById(req.params.id).select('titre artiste image');
     if (!song) return res.status(404).json({ message: 'Introuvable' });
+    const expiresAt = new Date(Date.now() + 7 * 86400000);
     const shareToken = jwt.sign({ songId: song._id, type:'share' }, process.env.JWT_SECRET, { expiresIn:'7d' });
-    res.json({ shareUrl: `${process.env.FRONTEND_URL||'https://moozik.app'}/share/${shareToken}`, shareToken, song: { titre:song.titre, artiste:song.artiste, image:song.image }, expiresIn:'7 jours' });
+    // Enregistrer dans l'historique de partage
+    let sharedBy = null;
+    const t = req.headers.authorization?.split(' ')[1];
+    if (t) { try { sharedBy = jwt.verify(t, process.env.JWT_SECRET).id; } catch {} }
+    await ShareHistory.findOneAndUpdate(
+      { shareToken },
+      { songId: song._id, sharedBy, shareToken, expiresAt },
+      { upsert: true, new: true }
+    );
+    res.json({ shareToken, song: { titre:song.titre, artiste:song.artiste, image:song.image }, expiresIn:'7 jours' });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 app.get('/share/:token', async (req, res) => {
@@ -756,9 +877,36 @@ app.get('/share/:token', async (req, res) => {
     if (decoded.type !== 'share') return res.status(400).json({ message: 'Token invalide' });
     const song = await Song.findById(decoded.songId).select('-audioPublicId -imagePublicId -__v').populate('artisteId','nom image');
     if (!song) return res.status(404).json({ message: 'Musique introuvable ou supprimée' });
-    await Song.findByIdAndUpdate(decoded.songId, { $inc: { plays:1 } });
-    res.set('Cache-Control','public, max-age=300'); res.json({ song, shared:true });
+    await ShareHistory.findOneAndUpdate({ shareToken: req.params.token }, { $inc: { viewCount: 1 } });
+    res.json({ song, shared:true });
   } catch (e) { if (e.name==='TokenExpiredError') return res.status(410).json({ message:'Lien expiré' }); res.status(400).json({ message:'Lien invalide' }); }
+});
+app.put('/share/:token/play', async (req, res) => {
+  try {
+    await ShareHistory.findOneAndUpdate({ shareToken: req.params.token }, { $inc: { playCount: 1 } });
+    res.json({ ok: true });
+  } catch { res.json({ ok: false }); }
+});
+// Historique de partages (utilisateur connecté)
+app.get('/my-shares', async (req, res) => {
+  try {
+    const t = req.headers.authorization?.split(' ')[1];
+    if (!t) return res.json([]);
+    const d = jwt.verify(t, process.env.JWT_SECRET);
+    const shares = await ShareHistory.find({ sharedBy: d.id })
+      .sort({ createdAt: -1 }).limit(50)
+      .populate('songId', 'titre artiste image plays');
+    res.json(shares);
+  } catch { res.json([]); }
+});
+// Historique de partages admin
+app.get('/admin/shares', requireAdmin, async (req, res) => {
+  try {
+    const shares = await ShareHistory.find().sort({ createdAt:-1 }).limit(100)
+      .populate('songId','titre artiste image')
+      .populate('sharedBy','nom email');
+    res.json(shares);
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 // ── HISTORIQUE ───────────────────────────────
