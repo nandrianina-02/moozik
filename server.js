@@ -5,7 +5,7 @@ const mongoose   = require('mongoose');
 const compression = require('compression');
 const http       = require('http');
 
-const { createIndexes } = require('./models/Index');
+const { createIndexes } = require('./models');
 const routes = require('./routes');
 
 // ── App ───────────────────────────────────────
