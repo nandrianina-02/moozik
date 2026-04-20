@@ -112,7 +112,14 @@ router.get('/songs/:id/lyrics', async (req, res) => {
 });
 
 // POST / PUT — uploader un fichier .lrc ou des lignes JSON
-router.put('/songs/:id/lyrics', requireAdminOrArtist, upload.single('lrc'), async (req, res) => {
+router.put('/songs/:id/lyrics', requireAdminOrArtist, (req, res, next) => {
+  // Si multipart (fichier lrc), utiliser multer
+  if (req.headers['content-type']?.includes('multipart/form-data')) {
+    upload.single('lrc')(req, res, next);
+  } else {
+    next(); // JSON normal
+  }
+}, async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
     if (!song) return res.status(404).json({ message: 'Musique introuvable' });
@@ -121,15 +128,12 @@ router.put('/songs/:id/lyrics', requireAdminOrArtist, upload.single('lrc'), asyn
 
     let lines = [];
 
-    // Cas 1 : fichier .lrc uploadé
     if (req.file) {
       const lrcText = req.file.buffer.toString('utf-8');
       lines = parseLRC(lrcText);
-    }
-    // Cas 2 : lignes JSON dans le body
-    else if (req.body.lines) {
-        lines = typeof req.body.lines === 'string' 
-        ? JSON.parse(req.body.lines) 
+    } else if (req.body.lines) {
+      lines = typeof req.body.lines === 'string'
+        ? JSON.parse(req.body.lines)
         : req.body.lines;
     }
 
@@ -141,7 +145,10 @@ router.put('/songs/:id/lyrics', requireAdminOrArtist, upload.single('lrc'), asyn
       { upsert: true, new: true }
     );
     res.json(lyrics);
-  } catch (e) { res.status(500).json({ message: e.message }); }
+  } catch (e) {
+    console.error('Lyrics PUT error:', e.message);
+    res.status(500).json({ message: e.message });
+  }
 });
 
 // DELETE paroles
