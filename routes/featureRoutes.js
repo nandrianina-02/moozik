@@ -26,13 +26,13 @@ const webpush  = require('web-push');
 const {
   Lyrics, Certification, SmartLink, Featuring,
   ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription,
-} = require('./featureModels');
+} = require('../models/featureModels');
 
 // ── Import depuis le projet principal ──────────
 // Adapte les chemins selon ta structure MVC
-const { requireAuth, requireAdmin, requireArtist, requireAdminOrArtist, optionalAuth, signToken, verifyToken } = require('./middleware/auth');
-const { upload, toCloud, IMG_TRANSFORM } = require('./middleware/upload');
-const { Song, Artist, User, Notification, Album } = require('./models');
+const { requireAuth, requireAdmin, requireArtist, requireAdminOrArtist, optionalAuth, signToken, verifyToken } = require('../middleware/auth');
+const { upload, toCloud, IMG_TRANSFORM } = require('../middleware/upload');
+const { Song, Artist, User, Notification, Album } = require('../models');
 
 // ── WebPush config ────────────────────────────
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {

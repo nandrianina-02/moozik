@@ -8,6 +8,8 @@ const http       = require('http');
 const { createIndexes } = require('./models');
 const routes = require('./routes');
 
+const featureRoutes = require('./routes/featureRoutes');
+
 // ── App ───────────────────────────────────────
 const app = express();
 
@@ -22,6 +24,7 @@ app.use((req, res, next) => {
 
 app.use(compression({ level: 6, threshold: 1024 }));
 app.use(express.json());
+app.use('/', featureRoutes);
 
 // ── MongoDB ───────────────────────────────────
 mongoose.connect(process.env.MONGO_URI)
