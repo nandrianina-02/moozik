@@ -6,12 +6,14 @@ const compression = require('compression');
 const http       = require('http');
 
 const { createIndexes } = require('./models');
-const routes = require('./routes');
+const { router: routes } = require('./routes');
 
 const featureRoutes = require('./routes/featureRoutes');
 
 // ── App ───────────────────────────────────────
 const app = express();
+
+const monetisationRoutes = require('./routes/monetisationRoutes');
 
 // ── CORS ──────────────────────────────────────
 app.use((req, res, next) => {
@@ -32,6 +34,11 @@ mongoose.connect(process.env.MONGO_URI)
   .catch(err => console.error('❌ MongoDB :', err));
 
 // ── Routes ────────────────────────────────────
+app.post('/webhooks/stripe',
+  express.raw({ type: 'application/json' }),
+  (req, res, next) => { req.rawBody = req.body; next(); }
+);
+app.use('/', monetisationRoutes);
 app.use('/', routes);
 
 // ── Health check ──────────────────────────────

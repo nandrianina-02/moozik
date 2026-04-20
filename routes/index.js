@@ -7,6 +7,8 @@ const ac    = require('../controllers/authController');
 const admin = require('../controllers/adminController');
 const featureRoutes = require('./featureRoutes');
 
+const monetisationModels = require('../models/monetisationModels');
+
 router.use('/', featureRoutes);
 
 // ══════════════════════════════════════════════
@@ -146,4 +148,4 @@ router.put('/notifications/:id/read',     auth.requireAuth, admin.markOneRead);
 router.delete('/notifications/clear',     auth.requireAuth, admin.clearNotifications);
 
 
-module.exports = router;
+module.exports = {router, monetisationModels};
