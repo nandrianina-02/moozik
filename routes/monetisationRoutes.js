@@ -175,7 +175,7 @@ router.put('/songs/:id/price', requireAdminOrArtist, async (req, res) => {
     if (req.user.role === 'artist' && String(song.artisteId) !== String(req.user.id))
       return res.status(403).json({ message: 'Accès refusé' });
     const { price, currency = 'EUR', forSale = true, freePreviewSeconds = 30 } = req.body;
-    if (forSale && (!price || price < 50)) return res.status(400).json({ message: 'Prix minimum 0,50 €' });
+    if (forSale && (!price || price < 0.5)) return res.status(400).json({ message: 'Prix minimum 0,50 €' });
     const sp = await SongPrice.findOneAndUpdate(
       { songId: req.params.id },
       { songId: req.params.id, artistId: song.artisteId, price: toCents(price), currency, forSale, freePreviewSeconds },
@@ -293,7 +293,7 @@ router.get('/admin/purchases', requireAdmin, async (req, res) => {
 router.post('/artists/:id/tip', requireAuth, async (req, res) => {
   try {
     const { amount, currency = 'EUR', message = '', provider = 'stripe', anonymous = false, phoneNumber } = req.body;
-    if (!amount || amount < 0,5) return res.status(400).json({ message: 'Montant minimum 0,50 €' });
+    if (!amount || amount < 0.5) return res.status(400).json({ message: 'Montant minimum 0,50 €' });
     const artist = await Artist.findById(req.params.id);
     if (!artist) return res.status(404).json({ message: 'Artiste introuvable' });
     const user = await User.findById(req.user.id);
