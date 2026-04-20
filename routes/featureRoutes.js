@@ -174,6 +174,8 @@ function parseLRC(text) {
 router.post('/artists/:id/certification', requireArtist, async (req, res) => {
   try {
     if (req.user.role === 'artist' && String(req.user.id) !== String(req.params.id))
+        console.log('user:', req.user); // ← ajoute ça
+        console.log('params:', req.params);
       return res.status(403).json({ message: 'Accès refusé' });
     const existing = await Certification.findOne({ artistId: req.params.id });
     if (existing && existing.status === 'pending') return res.status(400).json({ message: 'Demande déjà en attente' });
