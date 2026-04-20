@@ -128,7 +128,9 @@ router.put('/songs/:id/lyrics', requireAdminOrArtist, upload.single('lrc'), asyn
     }
     // Cas 2 : lignes JSON dans le body
     else if (req.body.lines) {
-      lines = JSON.parse(req.body.lines);
+        lines = typeof req.body.lines === 'string' 
+        ? JSON.parse(req.body.lines) 
+        : req.body.lines;
     }
 
     if (!lines.length) return res.status(400).json({ message: 'Aucune ligne de paroles trouvée' });
