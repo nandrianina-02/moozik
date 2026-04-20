@@ -172,17 +172,19 @@ function parseLRC(text) {
 
 // Demander une certification (artiste)
 router.post('/artists/:id/certification', requireArtist, async (req, res) => {
+    console.log('role:', req.user?.role);
+    console.log('user.id:', req.user?.id);
+    console.log('user._id:', req.user?._id);
+    console.log('params.id:', req.params.id);
   try {
-    if (req.user.role === 'artist' && String(req.user.id) !== String(req.params.id))
-        console.log('user:', req.user); // ← ajoute ça
-        console.log('params:', req.params);
+    if (req.user.role === 'artist' && String(req.user.id || req.user._id) !== String(req.params.id))
       return res.status(403).json({ message: 'Accès refusé' });
     const existing = await Certification.findOne({ artistId: req.params.id });
     if (existing && existing.status === 'pending') return res.status(400).json({ message: 'Demande déjà en attente' });
     if (existing && existing.status === 'approved') return res.status(400).json({ message: 'Déjà certifié' });
     const cert = await Certification.findOneAndUpdate(
       { artistId: req.params.id },
-      { artistId: req.params.id, status: 'pending', requestedAt: new Date(), note: req.body.note || '' },
+      { artistId: req.params.id, status: 'pending', requestedAt: new Date(), note: req.body?.note || '' },
       { upsert: true, new: true }
     );
     res.json(cert);
