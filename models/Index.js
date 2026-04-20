@@ -9,6 +9,8 @@ const ArtistSchema = new mongoose.Schema({
   email:          { type: String, unique: true, sparse: true },
   password:       String,
   role:           { type: String, default: 'artist' },
+  certified:    { type: Boolean, default: false },
+  certLevel:    { type: String, enum: ['blue','gold'], default: 'blue' },
 }, { timestamps: true });
 
 // ── Album ─────────────────────────────────────
@@ -142,6 +144,12 @@ const ShareHistorySchema = new mongoose.Schema({
 ShareHistorySchema.index({ shareToken: 1 }, { unique: true });
 ShareHistorySchema.index({ sharedBy: 1, createdAt: -1 });
 
+
+const {
+  Lyrics, Certification, SmartLink, Featuring,
+  ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription,
+} = require('./featureModels');
+
 // ── Register models ───────────────────────────
 const Artist       = mongoose.model('Artist',       ArtistSchema);
 const Album        = mongoose.model('Album',         AlbumSchema);
@@ -174,5 +182,6 @@ const createIndexes = () => {
 module.exports = {
   Artist, Album, Song, Admin, User, Playlist, UserPlaylist,
   Comment, Reaction, UserPlay, UserFavorite, History, Notification,
-  ShareHistory, createIndexes,
+  ShareHistory, createIndexes,Lyrics, Certification, SmartLink, Featuring,
+  ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription,
 };

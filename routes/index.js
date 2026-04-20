@@ -5,6 +5,7 @@ const { upload } = require('../middleware/upload');
 const song  = require('../controllers/songController');
 const ac    = require('../controllers/authController');
 const admin = require('../controllers/adminController');
+const featureRoutes = require('./featureRoutes');
 
 // ══════════════════════════════════════════════
 // SONGS
@@ -141,5 +142,6 @@ router.get('/notifications',              auth.requireAuth, admin.getNotificatio
 router.put('/notifications/read-all',     auth.requireAuth, admin.markAllRead);
 router.put('/notifications/:id/read',     auth.requireAuth, admin.markOneRead);
 router.delete('/notifications/clear',     auth.requireAuth, admin.clearNotifications);
+app.use('/', featureRoutes);
 
 module.exports = router;
