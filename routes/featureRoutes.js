@@ -37,7 +37,7 @@ const { Song, Artist, User, Notification, Album } = require('../models');
 // ── WebPush config ────────────────────────────
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails(
-    process.env.VAPID_EMAIL || 'mailto:admin@moozik.app',
+    process.env.VAPID_EMAIL || 'mailto:dodisoa.nandrianina@gmail.com',
     process.env.VAPID_PUBLIC_KEY,
     process.env.VAPID_PRIVATE_KEY,
   );
