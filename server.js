@@ -19,13 +19,14 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 app.use('/', analyticsRoutes);
 
 // ── CORS ──────────────────────────────────────
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin',  '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
+const cors = require('cors');
+
+app.use(cors({
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 
 app.use(compression({ level: 6, threshold: 1024 }));
 app.use(express.json());
