@@ -16,7 +16,6 @@ const app = express();
 const monetisationRoutes = require('./routes/monetisationRoutes');
 
 const analyticsRoutes = require('./routes/analyticsRoutes');
-app.use('/', analyticsRoutes);
 
 // ── CORS ──────────────────────────────────────
 const cors = require('cors');
@@ -30,7 +29,6 @@ app.use(cors({
 
 app.use(compression({ level: 6, threshold: 1024 }));
 app.use(express.json());
-app.use('/', featureRoutes);
 
 // ── MongoDB ───────────────────────────────────
 mongoose.connect(process.env.MONGO_URI)
@@ -44,6 +42,9 @@ app.post('/webhooks/stripe',
 );
 app.use('/', monetisationRoutes);
 app.use('/', routes);
+app.use('/', featureRoutes);
+app.use('/', analyticsRoutes);
+
 
 // ── Health check ──────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
