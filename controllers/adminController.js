@@ -224,6 +224,14 @@ exports.getComments = async (req, res) => {
 };
 
 exports.addComment = async (req, res) => {
+
+  // Après avoir sauvegardé le commentaire :
+  const { addPoints, analyzeCommentSentiment } = require('../routes/analyticsRoutes');
+  addPoints(req.user.id, 'comment', String(req.params.id)).catch(() => {});
+  // Re-analyser le sentiment toutes les 10 commentaires
+  Comment.countDocuments({ songId: req.params.id }).then(count => {
+    if (count % 10 === 0) analyzeCommentSentiment(req.params.id).catch(() => {});
+  });
   try {
     const { texte, auteur } = req.body;
     if (!texte?.trim()) return res.status(400).json({ message: 'Texte requis' });

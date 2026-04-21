@@ -74,6 +74,24 @@ exports.toggleLike = async (req, res) => {
 
 // ── PUT /songs/:id/play ───────────────────────
 exports.registerPlay = async (req, res) => {
+  const { trackDemographics, addPoints } = require('../routes/analyticsRoutes');
+  // ou si analyticsRoutes est dans un fichier séparé :
+  // const { trackDemographics, addPoints } = require('../routes/analyticsRoutes');
+
+  // Après avoir incrémenté les plays :
+  if (song.artisteId) {
+    trackDemographics(song.artisteId, req).catch(() => {});
+  }
+
+  // Appeler le geo tracker
+  fetch(`${process.env.BASE_URL || 'http://localhost:5000'}/songs/${req.params.id}/geo-play`, {
+    method: 'POST', headers: req.headers,
+  }).catch(() => {});
+
+  // Créditer les points de fidélité
+  if (d?.role === 'user') {
+    addPoints(d.id, 'play', String(req.params.id)).catch(() => {});
+  }
   try {
     const song = await Song.findByIdAndUpdate(req.params.id, { $inc: { plays: 1 } }, { new: true });
     if (!song) return res.status(404).json({ message: 'Introuvable' });

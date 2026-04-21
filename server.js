@@ -15,6 +15,9 @@ const app = express();
 
 const monetisationRoutes = require('./routes/monetisationRoutes');
 
+const analyticsRoutes = require('./routes/analyticsRoutes');
+app.use('/', analyticsRoutes);
+
 // ── CORS ──────────────────────────────────────
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
