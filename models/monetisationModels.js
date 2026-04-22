@@ -18,6 +18,7 @@ const PlanSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Plan = mongoose.model('Plan', PlanSchema);
 
+
 // ── Abonnement utilisateur ────────────────────
 const SubscriptionSchema = new mongoose.Schema({
   userId:       { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

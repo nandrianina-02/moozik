@@ -31,6 +31,7 @@ app.use(cors({
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('X-Custom-Test', 'hello'); // ← test
   next();
 });
 

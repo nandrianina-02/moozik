@@ -118,7 +118,7 @@ router.get('/songs/:id/retention', requireAdminOrArtist, async (req, res) => {
     if (!events.length) return res.json({ buckets: Array(20).fill(0), completionRate: 0, avgListenPercent: 0 });
 
     const totals = Array(20).fill(0);
-    events.forEach(e => { e.buckets.forEach((v, i) => { totals[i] += v; }); });
+    events.forEach(e => {if (Array.isArray(e.buckets)) {e.buckets.forEach((v, i) => {totals[i] += v || 0;});}});    
     const maxListeners = totals[0] || 1;
     const retentionCurve = totals.map(v => Math.round((v / maxListeners) * 100));
     const completionRate = Math.round((events.filter(e => e.completed).length / events.length) * 100);
@@ -493,7 +493,9 @@ router.get('/charts/:type', async (req, res) => {
   try {
     const week  = req.query.week || getWeek();
     const type  = ['songs','artists','new','viral'].includes(req.params.type) ? req.params.type : 'songs';
-    let chart   = await WeeklyChart.findOne({ week, type });
+    let chart   = await WeeklyChart.findOne({ week, type })
+      .populate('entries.songId')
+      .populate('entries.artistId');
     if (!chart) chart = await generateChart(week, type);
     res.set('Cache-Control', 'public, max-age=3600');
     res.json(chart);
