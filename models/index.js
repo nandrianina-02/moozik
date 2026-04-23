@@ -147,6 +147,27 @@ const ShareHistorySchema = new mongoose.Schema({
 ShareHistorySchema.index({ shareToken: 1 }, { unique: true });
 ShareHistorySchema.index({ sharedBy: 1, createdAt: -1 });
 
+// ── ListenParty ───────────────────────────────
+const ListenPartySchema = new mongoose.Schema({
+  name:         { type: String, required: true },
+  code:         { type: String, required: true, unique: true, uppercase: true },
+  hostId:       { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  songId:       { type: mongoose.Schema.Types.ObjectId, ref: 'Song', default: null },
+  isPlaying:    { type: Boolean, default: false },
+  participants: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  messages:     [{
+    nom:   String,
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    text:  String,
+    ts:    { type: Date, default: Date.now },
+  }],
+  isActive:     { type: Boolean, default: true },
+  expiresAt:    { type: Date, default: () => new Date(Date.now() + 4 * 3600000) }, // 4h d'inactivité
+}, { timestamps: true });
+ListenPartySchema.index({ code: 1 });
+ListenPartySchema.index({ hostId: 1 });
+ListenPartySchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
 
 const {
   Lyrics, Certification, SmartLink, Featuring,
@@ -168,6 +189,7 @@ const UserFavorite = mongoose.model('UserFavorite',  UserFavoriteSchema);
 const History      = mongoose.model('History',       HistorySchema);
 const Notification = mongoose.model('Notification',  NotificationSchema);
 const ShareHistory = mongoose.model('ShareHistory',  ShareHistorySchema);
+const ListenParty  = mongoose.model('ListenParty',  ListenPartySchema);
 
 // ── Indexes ───────────────────────────────────
 const createIndexes = () => {
@@ -185,6 +207,6 @@ const createIndexes = () => {
 module.exports = {
   Artist, Album, Song, Admin, User, Playlist, UserPlaylist,
   Comment, Reaction, UserPlay, UserFavorite, History, Notification,
-  ShareHistory, createIndexes,Lyrics, Certification, SmartLink, Featuring,
+  ShareHistory, ListenParty, createIndexes,Lyrics, Certification, SmartLink, Featuring,
   ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription,
 };

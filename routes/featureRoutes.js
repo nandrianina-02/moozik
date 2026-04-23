@@ -26,13 +26,14 @@ const webpush  = require('web-push');
 const {
   Lyrics, Certification, SmartLink, Featuring,
   ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription,
+  ListenParty,
 } = require('../models/featureModels');
 
 // ── Import depuis le projet principal ──────────
 // Adapte les chemins selon ta structure MVC
 const { requireAuth, requireAdmin, requireArtist, requireAdminOrArtist, optionalAuth, signToken, verifyToken } = require('../middleware/auth');
 const { upload, toCloud, IMG_TRANSFORM } = require('../middleware/upload');
-const { Song, Artist, User, Notification, Album } = require('../models');
+const { Song, Artist, User, Notification, Album, ListenParty: ListenPartyModel } = require('../models');
 
 // ── WebPush config ────────────────────────────
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
@@ -514,6 +515,145 @@ router.get('/config/languages', (_req, res) => {
       { code: 'TZS', symbol: 'TSh',  label: 'Shilling Tanzanien' },
     ],
   });
+});
+
+// ════════════════════════════════════════════
+// LISTEN PARTY (Écoute collaborative)
+// ════════════════════════════════════════════
+
+// POST /listen-party — Créer une party
+router.post('/listen-party', requireAuth, async (req, res) => {
+  try {
+    const { name, code, songId } = req.body;
+    if (!name?.trim() || !code?.trim()) return res.status(400).json({ message: 'Nom et code requis' });
+
+    // Vérifier unicité du code
+    const existing = await ListenPartyModel.findOne({ code: code.toUpperCase() });
+    if (existing) return res.status(409).json({ message: 'Ce code est déjà utilisé' });
+
+    const song = songId ? await Song.findById(songId) : null;
+    const party = await new ListenPartyModel({
+      name: name.trim(),
+      code: code.toUpperCase(),
+      hostId: req.user.id,
+      songId: songId || null,
+      isPlaying: false,
+      participants: [req.user.id],
+      messages: [],
+      isActive: true,
+      expiresAt: new Date(Date.now() + 4 * 3600000),
+    }).save();
+
+    const populated = await party.populate('hostId', 'nom').populate('songId');
+    res.json(populated);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// GET /listen-party — Lister les parties publiques actives
+router.get('/listen-party', optionalAuth, async (req, res) => {
+  try {
+    const parties = await ListenPartyModel.find({ isActive: true, expiresAt: { $gt: new Date() } })
+      .populate('hostId', 'nom')
+      .populate('songId', 'titre artiste image')
+      .sort({ createdAt: -1 })
+      .limit(20);
+    res.json(parties);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// GET /listen-party/:code — Récupérer une party par code
+router.get('/listen-party/:code', optionalAuth, async (req, res) => {
+  try {
+    const party = await ListenPartyModel.findOne({ code: req.params.code.toUpperCase() })
+      .populate('hostId', 'nom')
+      .populate('participants', 'nom')
+      .populate('songId');
+    if (!party || !party.isActive) return res.status(404).json({ message: 'Party introuvable' });
+    res.json(party);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// POST /listen-party/:code/join — Rejoindre une party
+router.post('/listen-party/:code/join', requireAuth, async (req, res) => {
+  try {
+    const party = await ListenPartyModel.findOne({ code: req.params.code.toUpperCase() });
+    if (!party || !party.isActive) return res.status(404).json({ message: 'Party introuvable' });
+
+    // Ajouter l'utilisateur aux participants
+    if (!party.participants.includes(req.user.id)) {
+      party.participants.push(req.user.id);
+      await party.save();
+    }
+
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// POST /listen-party/:code/message — Envoyer un message
+router.post('/listen-party/:code/message', requireAuth, async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text?.trim()) return res.status(400).json({ message: 'Message vide' });
+
+    const user = await User.findById(req.user.id).select('nom');
+    const party = await ListenPartyModel.findOne({ code: req.params.code.toUpperCase() });
+    if (!party) return res.status(404).json({ message: 'Party introuvable' });
+
+    party.messages.push({
+      nom: user.nom || 'Utilisateur',
+      userId: req.user.id,
+      text: text.trim().slice(0, 500),
+      ts: new Date(),
+    });
+
+    // Garder seulement les 100 derniers messages
+    if (party.messages.length > 100) {
+      party.messages = party.messages.slice(-100);
+    }
+
+    await party.save();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// PUT /listen-party/:code/song — Changer la chanson en cours
+router.put('/listen-party/:code/song', requireAuth, async (req, res) => {
+  try {
+    const { songId, isPlaying } = req.body;
+    const party = await ListenPartyModel.findOne({ code: req.params.code.toUpperCase() });
+    if (!party) return res.status(404).json({ message: 'Party introuvable' });
+
+    // Vérifier que c'est l'hôte qui change la chanson
+    if (String(party.hostId) !== String(req.user.id)) {
+      return res.status(403).json({ message: 'Seul l\'hôte peut changer la chanson' });
+    }
+
+    party.songId = songId || null;
+    party.isPlaying = isPlaying ?? false;
+    await party.save();
+
+    const updated = await party.populate('songId');
+    res.json(updated);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// DELETE /listen-party/:code — Quitter / supprimer une party
+router.delete('/listen-party/:code', requireAuth, async (req, res) => {
+  try {
+    const party = await ListenPartyModel.findOne({ code: req.params.code.toUpperCase() });
+    if (!party) return res.status(404).json({ message: 'Party introuvable' });
+
+    // Si c'est l'hôte, supprimer la party
+    if (String(party.hostId) === String(req.user.id)) {
+      await ListenPartyModel.deleteOne({ code: req.params.code.toUpperCase() });
+    } else {
+      // Sinon, juste retirer le participant
+      party.participants = party.participants.filter(p => String(p) !== String(req.user.id));
+      await party.save();
+    }
+
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
 // ════════════════════════════════════════════
