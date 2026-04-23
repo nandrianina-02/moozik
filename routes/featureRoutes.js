@@ -532,7 +532,6 @@ router.post('/listen-party', requireAuth, async (req, res) => {
     const existing = await ListenParty.findOne({ code: code.toUpperCase() });
     if (existing) return res.status(409).json({ message: 'Ce code est déjà utilisé' });
 
-    const song = songId ? await Song.findById(songId) : null;
     const party = await new ListenParty({
       name: name.trim(),
       code: code.toUpperCase(),
@@ -545,7 +544,10 @@ router.post('/listen-party', requireAuth, async (req, res) => {
       expiresAt: new Date(Date.now() + 4 * 3600000),
     }).save();
 
-    const populated = await party.populate('hostId', 'nom').execPopulate().then(p => p.populate('songId'));
+    // Récupérer la party avec les données populées
+    const populated = await ListenParty.findById(party._id)
+      .populate('hostId', 'nom')
+      .populate('songId');
     res.json(populated);
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
