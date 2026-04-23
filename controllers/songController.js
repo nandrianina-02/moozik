@@ -182,6 +182,16 @@ exports.updateSong = async (req, res) => {
     if (req.body.artiste  && req.user.role === 'admin') u.artiste  = req.body.artiste;
     if (req.body.artisteId !== undefined && req.user.role === 'admin') u.artisteId = req.body.artisteId || null;
     if (req.body.albumId  !== undefined) u.albumId = req.body.albumId || null;
+    if (req.body.genre)   u.genre = req.body.genre;
+    if (req.body.annee)   u.annee = req.body.annee;
+    // Handle moods — sent as JSON string from FormData
+    if (req.body.moods) {
+      try {
+        u.moods = typeof req.body.moods === 'string' ? JSON.parse(req.body.moods) : req.body.moods;
+      } catch {
+        u.moods = [];
+      }
+    }
     if (req.file) {
       await fromCloud(song.imagePublicId);
       const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
