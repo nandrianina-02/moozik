@@ -541,11 +541,11 @@ router.post('/listen-party', requireAuth, async (req, res) => {
       isPlaying: false,
       participants: [req.user.id],
       messages: [],
-      isActive: true,
+      active: true,
       expiresAt: new Date(Date.now() + 4 * 3600000),
     }).save();
 
-    const populated = await party.populate('hostId', 'nom').populate('songId');
+    const populated = await party.populate('hostId', 'nom').execPopulate().then(p => p.populate('songId'));
     res.json(populated);
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
@@ -553,7 +553,7 @@ router.post('/listen-party', requireAuth, async (req, res) => {
 // GET /listen-party — Lister les parties publiques actives
 router.get('/listen-party', optionalAuth, async (req, res) => {
   try {
-    const parties = await ListenParty.find({ isActive: true, expiresAt: { $gt: new Date() } })
+    const parties = await ListenParty.find({ active: true, expiresAt: { $gt: new Date() } })
       .populate('hostId', 'nom')
       .populate('songId', 'titre artiste image')
       .sort({ createdAt: -1 })
@@ -569,7 +569,7 @@ router.get('/listen-party/:code', optionalAuth, async (req, res) => {
       .populate('hostId', 'nom')
       .populate('participants', 'nom')
       .populate('songId');
-    if (!party || !party.isActive) return res.status(404).json({ message: 'Party introuvable' });
+    if (!party || !party.active) return res.status(404).json({ message: 'Party introuvable' });
     res.json(party);
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
@@ -578,7 +578,7 @@ router.get('/listen-party/:code', optionalAuth, async (req, res) => {
 router.post('/listen-party/:code/join', requireAuth, async (req, res) => {
   try {
     const party = await ListenParty.findOne({ code: req.params.code.toUpperCase() });
-    if (!party || !party.isActive) return res.status(404).json({ message: 'Party introuvable' });
+    if (!party || !party.active) return res.status(404).json({ message: 'Party introuvable' });
 
     // Ajouter l'utilisateur aux participants
     if (!party.participants.includes(req.user.id)) {
@@ -604,7 +604,7 @@ router.post('/listen-party/:code/message', requireAuth, async (req, res) => {
       nom: user.nom || 'Utilisateur',
       userId: req.user.id,
       text: text.trim().slice(0, 500),
-      ts: new Date(),
+      time: new Date(),
     });
 
     // Garder seulement les 100 derniers messages
@@ -633,7 +633,7 @@ router.put('/listen-party/:code/song', requireAuth, async (req, res) => {
     party.isPlaying = isPlaying ?? false;
     await party.save();
 
-    const updated = await party.populate('songId');
+    const updated = await ListenParty.findById(party._id).populate('songId');
     res.json(updated);
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
