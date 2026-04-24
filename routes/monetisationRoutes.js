@@ -638,6 +638,23 @@ router.get('/events/:id', optionalAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
+// Supprimer l'évènements
+
+router.delete('/events/:id', async (req, res) => {
+  try {
+    const event = await Event.findByIdAndDelete(req.params.id);
+
+    if (!event) {
+      return res.status(404).json({ message: "Event introuvable" });
+    }
+
+    res.json({ message: "Event supprimé avec succès" });
+
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+});
+
 // POST — acheter un billet
 router.post('/events/:id/tickets', requireAuth, async (req, res) => {
   try {
