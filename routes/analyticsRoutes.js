@@ -451,8 +451,8 @@ router.delete('/stories/:id', async (req, res) => {
 
     // 3. Supprimer de la base de données
     await Story.findByIdAndDelete(storyId);
-
-    res.json({ message: 'Story supprimée avec succès' });
+    res.status(200).json({ message: 'Story supprimée' });
+    // res.json({ message: 'Story supprimée avec succès' });
   } catch (e) {
     res.status(500).json({ message: e.message });
   }
