@@ -19,6 +19,8 @@
 const express  = require('express');
 const router   = express.Router();
 const crypto   = require('crypto');
+// DELETE /stories/:id
+const { fromCloud } = require('../middleware/upload');
 
 // Deps optionnelles — ne plantent pas si absentes
 let geoip, UAParser;
@@ -428,6 +430,32 @@ router.get('/artists/:id/stories', async (req, res) => {
     const stories = await Story.find({ artistId: req.params.id, active: true, expiresAt: { $gt: new Date() } }).sort({ createdAt: -1 });
     res.json(stories);
   } catch (e) { res.status(500).json({ message: e.message }); }
+});
+
+// DELETE /stories/:id
+router.delete('/stories/:id', async (req, res) => {
+  try {
+    const storyId = req.params.id;
+
+    // 1. Récupérer la story pour avoir le publicId
+    const story = await Story.findById(storyId);
+
+    if (!story) {
+      return res.status(404).json({ message: 'Story introuvable' });
+    }
+
+    // 2. Supprimer le fichier sur Cloudinary via ton helper
+    // On précise 'video' si le mimetype stocké n'est pas une image
+    const resourceType = story.mimetype && story.mimetype.startsWith('audio') ? 'video' : 'image';
+    await fromCloud(story.cloudinaryId, resourceType);
+
+    // 3. Supprimer de la base de données
+    await Story.findByIdAndDelete(storyId);
+
+    res.json({ message: 'Story supprimée avec succès' });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
 });
 
 // PUT — marquer une story comme vue

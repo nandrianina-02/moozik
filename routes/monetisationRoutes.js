@@ -644,6 +644,7 @@ router.delete('/events/:id', async (req, res) => {
   try {
     const event = await Event.findByIdAndDelete(req.params.id);
 
+
     if (!event) {
       return res.status(404).json({ message: "Event introuvable" });
     }
