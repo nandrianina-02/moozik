@@ -17,6 +17,8 @@ const monetisationRoutes = require('./routes/monetisationRoutes');
 
 const analyticsRoutes = require('./routes/analyticsRoutes');
 
+const radioRoutes = require('./routes/radioRoutes');
+
 // ── CORS ──────────────────────────────────────
 const cors = require('cors');
 
@@ -52,6 +54,7 @@ app.use('/', monetisationRoutes);
 app.use('/', routes);
 app.use('/', featureRoutes);
 app.use('/', analyticsRoutes);
+app.use('/', radioRoutes);
 
 
 // ── Health check ──────────────────────────────
@@ -62,6 +65,7 @@ app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err.message);
   res.status(err.status || 500).json({ message: err.message || 'Erreur serveur' });
 });
+
 
 // ══════════════════════════════════════════════
 // HTTP + WebSocket server
