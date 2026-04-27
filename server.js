@@ -18,6 +18,7 @@ const monetisationRoutes = require('./routes/monetisationRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 
 const radioRoutes = require('./routes/radioRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 // ── CORS ──────────────────────────────────────
 const cors = require('cors');
@@ -55,6 +56,7 @@ app.use('/', routes);
 app.use('/', featureRoutes);
 app.use('/', analyticsRoutes);
 app.use('/', radioRoutes);
+app.use('/admin', adminRoutes);
 
 
 // ── Health check ──────────────────────────────
