@@ -19,6 +19,7 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 
 const radioRoutes = require('./routes/radioRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const tsComments = require('./routes/timestampCommentRoutes');
 
 // ── CORS ──────────────────────────────────────
 const cors = require('cors');
@@ -57,6 +58,7 @@ app.use('/', featureRoutes);
 app.use('/', analyticsRoutes);
 app.use('/', radioRoutes);
 app.use('/admin', adminRoutes);
+app.use('/', tsComments);
 
 
 // ── Health check ──────────────────────────────
