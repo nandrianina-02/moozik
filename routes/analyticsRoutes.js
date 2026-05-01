@@ -257,6 +257,7 @@ const trackDemographics = async (artistId, req) => {
   );
 };
 
+
 // GET — demographics d'un artiste
 router.get('/artists/:id/demographics', requireAdminOrArtist, async (req, res) => {
   try {

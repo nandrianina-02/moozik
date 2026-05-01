@@ -74,49 +74,69 @@ exports.toggleLike = async (req, res) => {
 
 // ── PUT /songs/:id/play ───────────────────────
 exports.registerPlay = async (req, res) => {
-  const { trackDemographics, addPoints } = require('../routes/analyticsRoutes');
-  // ou si analyticsRoutes est dans un fichier séparé :
-  // const { trackDemographics, addPoints } = require('../routes/analyticsRoutes');
-
-  // Après avoir incrémenté les plays :
-  if (song.artisteId) {
-    trackDemographics(song.artisteId, req).catch(() => {});
-  }
-
-  // Appeler le geo tracker
-  fetch(`${process.env.BASE_URL || 'http://localhost:5000'}/songs/${req.params.id}/geo-play`, {
-    method: 'POST', headers: req.headers,
-  }).catch(() => {});
-
-  // Créditer les points de fidélité
-  if (d?.role === 'user') {
-    addPoints(d.id, 'play', String(req.params.id)).catch(() => {});
-  }
   try {
-    const song = await Song.findByIdAndUpdate(req.params.id, { $inc: { plays: 1 } }, { new: true });
+    // 1. Fetch song first — everything else depends on it
+    const song = await Song.findByIdAndUpdate(
+      req.params.id,
+      { $inc: { plays: 1 } },
+      { new: true }
+    );
     if (!song) return res.status(404).json({ message: 'Introuvable' });
 
+    // 2. Decode token (used by multiple branches below)
     const t = req.headers.authorization?.split(' ')[1];
+    let d = null;
     if (t) {
-      try {
-        const d = verifyToken(t);
-        if (d.role === 'user' || d.role === 'artist') {
-          await UserPlay.findOneAndUpdate({ userId: d.id, songId: req.params.id }, { $inc: { count: 1 } }, { upsert: true });
-          await History.create({ userId: d.id, songId: req.params.id });
-          const cnt = await History.countDocuments({ userId: d.id });
-          if (cnt > 500) {
-            const oldest = await History.find({ userId: d.id }).sort({ playedAt: 1 }).limit(cnt - 500).select('_id');
-            await History.deleteMany({ _id: { $in: oldest.map(o => o._id) } });
-          }
-        }
-      } catch {}
+      try { d = verifyToken(t); } catch {}
     }
-    // Share token tracking
+
+    // 3. User history tracking
+    if (d?.role === 'user' || d?.role === 'artist') {
+      await UserPlay.findOneAndUpdate(
+        { userId: d.id, songId: req.params.id },
+        { $inc: { count: 1 } },
+        { upsert: true }
+      );
+      await History.create({ userId: d.id, songId: req.params.id });
+      const cnt = await History.countDocuments({ userId: d.id });
+      if (cnt > 500) {
+        const oldest = await History.find({ userId: d.id })
+          .sort({ playedAt: 1 })
+          .limit(cnt - 500)
+          .select('_id');
+        await History.deleteMany({ _id: { $in: oldest.map(o => o._id) } });
+      }
+    }
+
+    // 4. Share token tracking
     const shareToken = req.body?.shareToken || req.query?.shareToken;
-    if (shareToken) await ShareHistory.findOneAndUpdate({ shareToken }, { $inc: { playCount: 1 } }).catch(() => {});
+    if (shareToken) {
+      await ShareHistory.findOneAndUpdate(
+        { shareToken },
+        { $inc: { playCount: 1 } }
+      ).catch(() => {});
+    }
+
+    // 5. Fire-and-forget side effects (after main work is done)
+    const { trackDemographics, addPoints } = require('../routes/analyticsRoutes');
+
+    if (song.artisteId) {
+      trackDemographics(song.artisteId, req).catch(() => {});
+    }
+
+    fetch(`${process.env.BASE_URL || 'http://localhost:5000'}/songs/${req.params.id}/geo-play`, {
+      method: 'POST',
+      headers: req.headers,
+    }).catch(() => {});
+
+    if (d?.role === 'user') {
+      addPoints(d.id, 'play', String(req.params.id)).catch(() => {});
+    }
 
     res.json({ plays: song.plays });
-  } catch (e) { res.status(500).json({ message: e.message }); }
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
 };
 
 // ── POST /upload ──────────────────────────────
