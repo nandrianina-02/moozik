@@ -41,7 +41,7 @@ const SmartLinkSchema = new mongoose.Schema({
     facebook:  { type: String, default: '' },
   },
 }, { timestamps: true });
-SmartLinkSchema.index({ slug: 1 }, { unique: true });
+
 const SmartLink = mongoose.model('SmartLink', SmartLinkSchema);
 
 // ── Featuting officiel ────────────────────────

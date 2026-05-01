@@ -44,7 +44,6 @@ const RadioSessionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-RadioSessionSchema.index({ sessionId: 1 }, { unique: true });
 RadioSessionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 86400 }); // TTL 24 h
 
 // Évite "Cannot overwrite model once compiled" en dev (hot-reload)

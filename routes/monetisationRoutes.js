@@ -420,12 +420,11 @@ const calculateRoyalties = async () => {
 };
 
 // Cron mensuel (1er du mois à 2h)
-const scheduleMonthlyCron = () => {
-  const now = new Date();
-  const next1st = new Date(now.getFullYear(), now.getMonth() + 1, 1, 2, 0, 0);
-  setTimeout(() => { calculateRoyalties(); setInterval(calculateRoyalties, 30 * 24 * 3600000); }, next1st - now);
-};
-scheduleMonthlyCron();
+const cron = require('node-cron');
+// Runs at 02:00 on the 1st of every month
+cron.schedule('0 2 1 * *', () => {
+  calculateRoyalties();
+});
 
 // GET — dashboard royalties artiste
 router.get('/artists/:id/royalties', requireAdminOrArtist, async (req, res) => {

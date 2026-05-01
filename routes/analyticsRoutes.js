@@ -540,11 +540,11 @@ const generateChart = async (week, type) => {
     const prevChart = await WeeklyChart.findOne({ week: getWeek(twoWeeksAgo), type });
     entries = scores.filter(s => s.songId).map((s, i) => {
       const prevRank = prevChart?.entries?.find(e => String(e.songId) === String(s.songId?._id))?.rank;
-      return { rank: i + 1, songId: s.songId._id, score: s.score, change: prevRank ? prevRank - (i + 1) : 0, isNew: !prevRank };
+      return { rank: i + 1, songId: s.songId._id, score: s.score, change: prevRank ? prevRank - (i + 1) : 0, isNewEntry: !prevRank };
     });
   } else if (type === 'new') {
     const songs = await Song.find({ createdAt: { $gte: weekAgo } }).sort({ plays: -1 }).limit(10).select('titre artiste image plays');
-    entries = songs.map((s, i) => ({ rank: i + 1, songId: s._id, score: s.plays, isNew: true, change: 0 }));
+    entries = songs.map((s, i) => ({ rank: i + 1, songId: s._id, score: s.plays, isNewEntry: true, change: 0 }));
   } else if (type === 'artists') {
     const artistData = await UserPlay.aggregate([
       { $match: { updatedAt: { $gte: weekAgo } } },
@@ -553,7 +553,7 @@ const generateChart = async (week, type) => {
       { $group: { _id: '$song.artisteId', score: { $sum: '$count' } } },
       { $sort: { score: -1 } }, { $limit: 10 },
     ]);
-    entries = artistData.filter(a => a._id).map((a, i) => ({ rank: i + 1, artistId: a._id, score: a.score, isNew: false, change: 0 }));
+    entries = artistData.filter(a => a._id).map((a, i) => ({ rank: i + 1, artistId: a._id, score: a.score, isNewEntry: false, change: 0 }));
   }
 
   return WeeklyChart.findOneAndUpdate({ week, type }, { week, type, entries, generatedAt: new Date() }, { upsert: true, new: true });

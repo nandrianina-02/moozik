@@ -133,7 +133,7 @@ const WeeklyChartSchema = new mongoose.Schema({
     artistId:   { type: mongoose.Schema.Types.ObjectId, ref: 'Artist' },
     score:      Number,
     change:     Number, // +/- par rapport à la semaine précédente
-    isNew:      { type: Boolean, default: false },
+    isNewEntry:      { type: Boolean, default: false },
   }],
   generatedAt: { type: Date, default: Date.now },
 }, { timestamps: true });
@@ -182,7 +182,6 @@ const ListenPartySchema = new mongoose.Schema({
   active:     { type: Boolean, default: true },
   expiresAt:  { type: Date },
 }, { timestamps: true });
-ListenPartySchema.index({ code: 1 }, { unique: true });
 ListenPartySchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 const ListenParty = mongoose.model('ListenParty', ListenPartySchema);
 
