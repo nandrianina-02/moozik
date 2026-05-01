@@ -75,7 +75,7 @@ const addPoints = async (userId, action, meta = '') => {
       $inc: { points: pts, totalEarned: pts },
       $push: { history: { action, points: pts, meta, date: new Date() } },
     },
-    { upsert: true, new: true }
+    { upsert: true, returnDocument: 'after' }
   );
   const level = getLoyaltyLevel(lp.points);
   if (lp.level !== level) await LoyaltyPoint.findByIdAndUpdate(lp._id, { level });
@@ -557,7 +557,7 @@ const generateChart = async (week, type) => {
     entries = artistData.filter(a => a._id).map((a, i) => ({ rank: i + 1, artistId: a._id, score: a.score, isNewEntry: false, change: 0 }));
   }
 
-  return WeeklyChart.findOneAndUpdate({ week, type }, { week, type, entries, generatedAt: new Date() }, { upsert: true, new: true });
+  return WeeklyChart.findOneAndUpdate({ week, type }, { week, type, entries, generatedAt: new Date() }, { upsert: true, returnDocument: 'after' });
 };
 
 // Cron — générer les charts chaque lundi
@@ -685,7 +685,7 @@ router.post('/listen-party/:code/message', requireAuth, async (req, res) => {
     const party = await ListenParty.findOneAndUpdate(
       { code: req.params.code.toUpperCase(), active: true },
       { $push: { messages: { userId: req.user.id, nom: user?.nom || 'Anonyme', avatar: user?.avatar || '', text: text.trim() } } },
-      { new: true }
+      { returnDocument: 'after' }
     );
     if (!party) return res.status(404).json({ message: 'Party introuvable' });
     const lastMsg = party.messages[party.messages.length - 1];
@@ -808,3 +808,4 @@ module.exports = router;
 module.exports.trackDemographics = trackDemographics;
 module.exports.addPoints = addPoints;
 module.exports.analyzeCommentSentiment = analyzeCommentSentiment;
+

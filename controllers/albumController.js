@@ -43,7 +43,7 @@ exports.update = async (req, res) => {
     if (req.body.titre) u.titre = req.body.titre;
     if (req.body.annee) u.annee = req.body.annee;
     if (req.file) { await fromCloud(album.imagePublicId); const r = await toCloud(req.file.buffer, { folder:'moozik/images', resource_type:'image', transformation: IMG_TRANSFORM }); u.image = r.secure_url; u.imagePublicId = r.public_id; }
-    res.json(await Album.findByIdAndUpdate(req.params.id, u, { new: true }));
+    res.json(await Album.findByIdAndUpdate(req.params.id, u, { returnDocument: 'after' }));
   } catch (e) { res.status(500).json(e); }
 };
 
@@ -64,7 +64,7 @@ exports.addSong = async (req, res) => {
     const a = await Album.findById(req.params.id);
     if (!a) return res.status(404).json({ message: 'Introuvable' });
     if (req.user.role === 'artist' && String(a.artisteId) !== String(req.user.id)) return res.status(403).json({ message: 'Accès refusé' });
-    res.json(await Song.findByIdAndUpdate(req.params.songId, { albumId: req.params.id }, { new: true }));
+    res.json(await Song.findByIdAndUpdate(req.params.songId, { albumId: req.params.id }, { returnDocument: 'after' }));
   } catch (e) { res.status(500).json(e); }
 };
 
@@ -77,3 +77,4 @@ exports.removeSong = async (req, res) => {
     res.json({ message: 'Retiré' });
   } catch (e) { res.status(500).json(e); }
 };
+

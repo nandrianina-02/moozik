@@ -53,3 +53,4 @@ adminSchema.methods.toSafeObject = function () {
 };
 
 module.exports = mongoose.models.Admin || mongoose.model('Admin', adminSchema);
+

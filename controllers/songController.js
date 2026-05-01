@@ -79,7 +79,7 @@ exports.registerPlay = async (req, res) => {
     const song = await Song.findByIdAndUpdate(
       req.params.id,
       { $inc: { plays: 1 } },
-      { new: true }
+      { returnDocument: 'after' }
     );
     if (!song) return res.status(404).json({ message: 'Introuvable' });
 
@@ -217,7 +217,7 @@ exports.updateSong = async (req, res) => {
       const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
       u.image = r.secure_url; u.imagePublicId = r.public_id;
     }
-    res.json(await Song.findByIdAndUpdate(req.params.id, u, { new: true }));
+    res.json(await Song.findByIdAndUpdate(req.params.id, u, { returnDocument: 'after' }));
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
@@ -339,3 +339,4 @@ exports.globalSearch = async (req, res) => {
     res.json({ songs, artists, albums, playlists });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
+

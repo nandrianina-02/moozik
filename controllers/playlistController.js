@@ -58,3 +58,4 @@ exports.toggleVisibility = async (req, res) => {
 exports.removeUser = async (req, res) => {
   try { const p = await UserPlaylist.findById(req.params.id); if (!p) return res.status(404).json({}); if (String(p.userId) !== String(req.user.id) && req.user.role !== 'admin') return res.status(403).json({}); await UserPlaylist.findByIdAndDelete(req.params.id); res.json({ message: 'Supprimée' }); } catch (e) { res.status(500).json({ message: e.message }); }
 };
+

@@ -37,3 +37,4 @@ const upload = multer({
 });
 
 module.exports = { cloudinary, toCloud, fromCloud, IMG_TRANSFORM, AVT_TRANSFORM, upload };
+

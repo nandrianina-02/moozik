@@ -205,3 +205,4 @@ module.exports = {
   SentimentAnalysis, Story, LoyaltyPoint, WeeklyChart, Challenge,
   FanBadge, ListenParty, WeeklyReport,
 };
+

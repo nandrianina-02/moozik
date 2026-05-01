@@ -188,3 +188,4 @@ module.exports = {
   ShareHistory, createIndexes,Lyrics, Certification, SmartLink, Featuring,
   ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription,
 };
+

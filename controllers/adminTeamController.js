@@ -217,7 +217,7 @@ exports.updateUserRole = async (req, res) => {
     const user = await User.findByIdAndUpdate(
       id,
       { role },
-      { new: true, runValidators: true }
+      { returnDocument: 'after', runValidators: true }
     ).select('-password');
 
     if (!user) return res.status(404).json({ message: 'Utilisateur introuvable' });
@@ -227,3 +227,4 @@ exports.updateUserRole = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+

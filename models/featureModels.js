@@ -102,3 +102,4 @@ module.exports = {
   Lyrics, Certification, SmartLink, Featuring,
   ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription,
 };
+

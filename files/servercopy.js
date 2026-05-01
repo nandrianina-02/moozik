@@ -278,7 +278,7 @@ app.put('/admin/admins/:id', requireAdmin, async (req, res) => {
     if (nom !== undefined) update.nom = nom;
     if (email) update.email = email;
     if (password && password.length >= 6) update.password = await bcrypt.hash(password, 12);
-    const updated = await Admin.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
+    const updated = await Admin.findByIdAndUpdate(req.params.id, update, { returnDocument: 'after' }).select('-password');
     res.json(updated);
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
@@ -381,7 +381,7 @@ app.put('/admin/users/:id', requireAdmin, async (req, res) => {
   try {
     const { nom, email } = req.body; const update = {};
     if (nom) update.nom = nom; if (email) update.email = email;
-    const user = await User.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
+    const user = await User.findByIdAndUpdate(req.params.id, update, { returnDocument: 'after' }).select('-password');
     if (!user) return res.status(404).json({ message: 'Introuvable' });
     res.json(user);
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -433,7 +433,7 @@ app.put('/users/:id', requireAuth, upload.single('avatar'), async (req, res) => 
       const r = await toCloud(req.file.buffer, { folder: 'moozik/avatars', resource_type: 'image', transformation: AVT_TRANSFORM });
       update.avatar = r.secure_url; update.avatarPublicId = r.public_id;
     }
-    const user = await User.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
+    const user = await User.findByIdAndUpdate(req.params.id, update, { returnDocument: 'after' }).select('-password');
     if (!user) return res.status(404).json({ message: 'Introuvable' });
     res.json(user);
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -531,7 +531,7 @@ app.put('/artists/:id', requireAdminOrArtist, upload.single('image'), async (req
       const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
       update.image = r.secure_url; update.imagePublicId = r.public_id;
     }
-    res.json(await Artist.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password'));
+    res.json(await Artist.findByIdAndUpdate(req.params.id, update, { returnDocument: 'after' }).select('-password'));
   } catch (e) { res.status(500).json(e); }
 });
 app.put('/artists/me', requireArtist, upload.single('image'), async (req, res) => {
@@ -539,7 +539,7 @@ app.put('/artists/me', requireArtist, upload.single('image'), async (req, res) =
     const update = {};
     if (req.body.nom) update.nom = req.body.nom; if (req.body.bio !== undefined) update.bio = req.body.bio;
     if (req.file) { const old = await Artist.findById(req.user.id); await fromCloud(old?.imagePublicId); const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM }); update.image = r.secure_url; update.imagePublicId = r.public_id; }
-    res.json(await Artist.findByIdAndUpdate(req.user.id, update, { new: true }).select('-password'));
+    res.json(await Artist.findByIdAndUpdate(req.user.id, update, { returnDocument: 'after' }).select('-password'));
   } catch (e) { res.status(500).json(e); }
 });
 app.put('/artists/:id/password', requireArtist, async (req, res) => {
@@ -596,7 +596,7 @@ app.put('/albums/:id', requireAdminOrArtist, upload.single('image'), async (req,
     const u = {};
     if (req.body.titre) u.titre = req.body.titre; if (req.body.annee) u.annee = req.body.annee;
     if (req.file) { await fromCloud(album.imagePublicId); const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM }); u.image = r.secure_url; u.imagePublicId = r.public_id; }
-    res.json(await Album.findByIdAndUpdate(req.params.id, u, { new: true }));
+    res.json(await Album.findByIdAndUpdate(req.params.id, u, { returnDocument: 'after' }));
   } catch (e) { res.status(500).json(e); }
 });
 app.delete('/albums/:id', requireAdminOrArtist, async (req, res) => {
@@ -613,7 +613,7 @@ app.post('/albums/:id/add/:songId', requireAdminOrArtist, async (req, res) => {
     const a = await Album.findById(req.params.id);
     if (!a) return res.status(404).json({ message: 'Introuvable' });
     if (req.user.role === 'artist' && String(a.artisteId) !== String(req.user.id)) return res.status(403).json({ message: 'Accès refusé' });
-    res.json(await Song.findByIdAndUpdate(req.params.songId, { albumId: req.params.id }, { new: true }));
+    res.json(await Song.findByIdAndUpdate(req.params.songId, { albumId: req.params.id }, { returnDocument: 'after' }));
   } catch (e) { res.status(500).json(e); }
 });
 app.delete('/albums/:id/remove/:songId', requireAdminOrArtist, async (req, res) => {
@@ -773,14 +773,14 @@ app.post('/upload', requireAdminOrArtist, upload.fields([{ name:'audio', maxCoun
 });
 app.put('/songs/:id/play', async (req, res) => {
   try {
-    const song = await Song.findByIdAndUpdate(req.params.id, { $inc: { plays:1 } }, { new:true });
+    const song = await Song.findByIdAndUpdate(req.params.id, { $inc: { plays:1 } }, { returnDocument: 'after' });
     if (!song) return res.status(404).json({ message: 'Introuvable' });
     const t = req.headers.authorization?.split(' ')[1];
     if (t) {
       try {
         const d = jwt.verify(t, process.env.JWT_SECRET);
         if (d.role === 'user' || d.role === 'artist') {
-          await UserPlay.findOneAndUpdate({ userId: d.id, songId: req.params.id }, { $inc: { count:1 } }, { upsert:true, new:true });
+          await UserPlay.findOneAndUpdate({ userId: d.id, songId: req.params.id }, { $inc: { count:1 } }, { upsert:true, returnDocument: 'after' });
           await History.create({ userId: d.id, songId: req.params.id });
           const cnt = await History.countDocuments({ userId: d.id });
           if (cnt > 500) { const oldest = await History.find({ userId: d.id }).sort({ playedAt:1 }).limit(cnt-500).select('_id'); await History.deleteMany({ _id: { $in: oldest.map(o=>o._id) } }); }
@@ -816,7 +816,7 @@ app.put('/songs/:id', requireAdminOrArtist, upload.single('image'), async (req, 
     if (req.body.artisteId && req.user.role === 'admin') u.artisteId = req.body.artisteId;
     if (req.body.albumId !== undefined) u.albumId = req.body.albumId || null;
     if (req.file) { await fromCloud(song.imagePublicId); const r = await toCloud(req.file.buffer, { folder:'moozik/images', resource_type:'image', transformation: IMG_TRANSFORM }); u.image = r.secure_url; u.imagePublicId = r.public_id; }
-    res.json(await Song.findByIdAndUpdate(req.params.id, u, { new:true }));
+    res.json(await Song.findByIdAndUpdate(req.params.id, u, { returnDocument: 'after' }));
   } catch (e) { res.status(500).json(e); }
 });
 // ── FAVORIS PAR UTILISATEUR ──────────────────
@@ -866,7 +866,7 @@ app.post('/songs/:id/share', async (req, res) => {
     await ShareHistory.findOneAndUpdate(
       { shareToken },
       { songId: song._id, sharedBy, shareToken, expiresAt },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     res.json({ shareToken, song: { titre:song.titre, artiste:song.artiste, image:song.image }, expiresIn:'7 jours' });
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -1230,3 +1230,4 @@ wss.on('connection', (ws, req) => {
  
   ws.on('error', () => ws.close());
 });
+

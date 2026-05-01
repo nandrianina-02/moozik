@@ -75,7 +75,7 @@ router.post('/push/subscribe', optionalAuth, async (req, res) => {
     await PushSubscription.findOneAndUpdate(
       { 'subscription.endpoint': subscription.endpoint },
       { subscription, userId, userAgent: req.headers['user-agent'] || '' },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -144,7 +144,7 @@ router.put('/songs/:id/lyrics', requireAdminOrArtist, (req, res, next) => {
     const lyrics = await Lyrics.findOneAndUpdate(
       { songId: req.params.id },
       { songId: req.params.id, lines, source: req.file ? 'lrc' : 'manual', uploadedBy: req.user.id },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     res.json(lyrics);
   } catch (e) {
@@ -196,7 +196,7 @@ router.post('/artists/:id/certification', requireArtist, async (req, res) => {
     const cert = await Certification.findOneAndUpdate(
       { artistId: req.params.id },
       { artistId: req.params.id, status: 'pending', requestedAt: new Date(), note: req.body?.note || '' },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     res.json(cert);
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -228,7 +228,7 @@ router.put('/admin/certifications/:id', requireAdmin, async (req, res) => {
     if (!['approved','rejected'].includes(status)) return res.status(400).json({ message: 'Status invalide' });
     const cert = await Certification.findByIdAndUpdate(req.params.id, {
       status, level: level || 'blue', note: note || '', reviewedAt: new Date(), reviewedBy: req.admin.id,
-    }, { new: true }).populate('artistId', 'nom');
+    }, { returnDocument: 'after' }).populate('artistId', 'nom');
     if (!cert) return res.status(404).json({ message: 'Introuvable' });
     // Mettre à jour le champ certified sur l'artiste
     if (status === 'approved') {
@@ -256,7 +256,7 @@ router.get('/a/:slug', async (req, res) => {
   try {
     const sl = await SmartLink.findOneAndUpdate(
       { slug: req.params.slug.toLowerCase() },
-      { $inc: { views: 1 } }, { new: true }
+      { $inc: { views: 1 } }, { returnDocument: 'after' }
     ).populate('artistId', 'nom image bio certified certLevel');
     if (!sl) return res.status(404).json({ message: 'Lien introuvable' });
     // Récupérer les musiques récentes de l'artiste
@@ -280,7 +280,7 @@ router.put('/artists/:id/smart-link', requireAdminOrArtist, async (req, res) => 
     const sl = await SmartLink.findOneAndUpdate(
       { artistId: req.params.id },
       { artistId: req.params.id, slug: clean, socialLinks: socialLinks || {}, customBio: customBio || '' },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     res.json(sl);
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -368,7 +368,7 @@ router.post('/songs/:id/schedule', requireAdminOrArtist, async (req, res) => {
     const release = await ScheduledRelease.findOneAndUpdate(
       { songId: req.params.id },
       { songId: req.params.id, artistId: song.artisteId, releaseAt: new Date(releaseAt), teaser: teaser || '', isPublished: false, notified: false },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     res.json(release);
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -682,3 +682,4 @@ router.get('/api/docs', (_req, res) => {
 });
 
 module.exports = router;
+

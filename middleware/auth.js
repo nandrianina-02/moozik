@@ -56,3 +56,4 @@ const signToken = (payload, expiresIn = '30d') =>
 const verifyToken = (token) => jwt.verify(token, SECRET());
 
 module.exports = { requireAuth, requireAdmin, requireArtist, requireAdminOrArtist, optionalAuth, signToken, verifyToken };
+

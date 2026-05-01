@@ -37,3 +37,4 @@ router.post('/radio/:sessionId/skip',    optionalAuth, ctrl.skipSong);
 router.post('/radio/:sessionId/like',    optionalAuth, ctrl.likeSong);
 
 module.exports = router;
+

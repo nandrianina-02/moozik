@@ -133,7 +133,7 @@ router.post('/songs/:songId/ts-comments/:commentId/reply', requireAuth, async (r
     const comment = await TimestampComment.findOneAndUpdate(
       { _id: req.params.commentId, songId: req.params.songId },
       { $push: { replies: { userId: req.user.id, nom: user?.nom || 'Utilisateur', avatar: user?.avatar || '', text: text.trim() } } },
-      { new: true }
+      { returnDocument: 'after' }
     ).populate('userId', 'nom avatar');
     if (!comment) return res.status(404).json({ message: 'Commentaire introuvable' });
     res.json(comment.replies[comment.replies.length - 1]);
@@ -218,3 +218,4 @@ router.get('/songs/:id/ts-comments/stats', async (req, res) => {
 });
 
 module.exports = router;
+

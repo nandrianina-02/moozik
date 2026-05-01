@@ -214,3 +214,4 @@ module.exports = {
   Royalty, AudioAd, AdImpression, Event, Ticket,
   ArtistPayout, MonetisationConfig,
 };
+

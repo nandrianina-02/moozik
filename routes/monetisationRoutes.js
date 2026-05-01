@@ -144,7 +144,7 @@ router.post('/admin/plans', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 router.put('/admin/plans/:id', requireAdmin, async (req, res) => {
-  try { res.json(await Plan.findByIdAndUpdate(req.params.id, req.body, { new: true })); }
+  try { res.json(await Plan.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' })); }
   catch (e) { res.status(500).json({ message: e.message }); }
 });
 
@@ -179,7 +179,7 @@ router.put('/songs/:id/price', requireAdminOrArtist, async (req, res) => {
     const sp = await SongPrice.findOneAndUpdate(
       { songId: req.params.id },
       { songId: req.params.id, artistId: song.artisteId, price: toCents(price), currency, forSale, freePreviewSeconds },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     res.json(sp);
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -355,7 +355,7 @@ router.post('/artists/:id/tip', requireAuth, async (req, res) => {
 // Confirmer un tip Mobile Money manuellement
 router.put('/tips/:id/confirm', requireAdmin, async (req, res) => {
   try {
-    const tip = await Tip.findByIdAndUpdate(req.params.id, { status: 'completed' }, { new: true });
+    const tip = await Tip.findByIdAndUpdate(req.params.id, { status: 'completed' }, { returnDocument: 'after' });
     if (!tip) return res.status(404).json({ message: 'Introuvable' });
     // Créditer les royalties de l'artiste
     await addToRoyalty(tip.toArtistId, null, 'tips', tip.amount, currentPeriod());
@@ -447,7 +447,7 @@ router.put('/artists/:id/payout', requireAdminOrArtist, async (req, res) => {
     const payout = await ArtistPayout.findOneAndUpdate(
       { artistId: req.params.id },
       { artistId: req.params.id, paypalEmail: paypalEmail||'', mobileMoneyPhone: mobileMoneyPhone||'', mobileMoneyProvider: mobileMoneyProvider||'none' },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
     res.json(payout);
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -462,7 +462,7 @@ router.post('/artists/:id/stripe-connect', requireAdminOrArtist, async (req, res
     let payout    = await ArtistPayout.findOne({ artistId: req.params.id });
     if (!payout?.stripeAccountId) {
       const account = await stripe.accounts.create({ type: 'express', email: artist.email, capabilities: { transfers: { requested: true } } });
-      payout = await ArtistPayout.findOneAndUpdate({ artistId: req.params.id }, { artistId: req.params.id, stripeAccountId: account.id }, { upsert: true, new: true });
+      payout = await ArtistPayout.findOneAndUpdate({ artistId: req.params.id }, { artistId: req.params.id, stripeAccountId: account.id }, { upsert: true, returnDocument: 'after' });
     }
     const link = await stripe.accountLinks.create({
       account: payout.stripeAccountId,
@@ -586,7 +586,7 @@ router.get('/admin/ads', requireAdmin, async (req, res) => {
 });
 
 router.put('/admin/ads/:id', requireAdmin, async (req, res) => {
-  try { res.json(await AudioAd.findByIdAndUpdate(req.params.id, req.body, { new: true })); }
+  try { res.json(await AudioAd.findByIdAndUpdate(req.params.id, req.body, { returnDocument: 'after' })); }
   catch (e) { res.status(500).json({ message: e.message }); }
 });
 
@@ -773,7 +773,7 @@ router.post('/webhooks/stripe',
             if (purchase) await addToRoyalty(purchase.artistId, purchase.songId, 'purchases', Math.round(purchase.price * (1 - PLATFORM_PERCENT / 100)), currentPeriod());
           }
           if (type === 'ticket' && ticketId) {
-            const ticket = await Ticket.findByIdAndUpdate(ticketId, { status: 'confirmed', stripePaymentIntentId: session.payment_intent }, { new: true });
+            const ticket = await Ticket.findByIdAndUpdate(ticketId, { status: 'confirmed', stripePaymentIntentId: session.payment_intent }, { returnDocument: 'after' });
             if (ticket) await Event.findByIdAndUpdate(ticket.eventId, { $inc: { ticketsSold: ticket.quantity } });
           }
           break;
@@ -804,7 +804,7 @@ router.post('/webhooks/stripe',
         case 'payment_intent.succeeded': {
           const pi = event.data.object;
           if (pi.metadata?.type === 'tip') {
-            const tip = await Tip.findOneAndUpdate({ stripePaymentIntentId: pi.id }, { status: 'completed' }, { new: true });
+            const tip = await Tip.findOneAndUpdate({ stripePaymentIntentId: pi.id }, { status: 'completed' }, { returnDocument: 'after' });
             if (tip) await addToRoyalty(tip.toArtistId, null, 'tips', Math.round(tip.amount * (1 - PLATFORM_PERCENT / 100)), currentPeriod());
           }
           break;
@@ -877,3 +877,4 @@ async function paydunyaInvoice({ amount, description, returnUrl, cancelUrl, meta
 }
 
 module.exports = router;
+

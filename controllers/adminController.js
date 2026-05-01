@@ -147,7 +147,7 @@ exports.updateUserAdmin = async (req, res) => {
     const update = {};
     if (nom) update.nom = nom;
     if (email) update.email = email;
-    const user = await User.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
+    const user = await User.findByIdAndUpdate(req.params.id, update, { returnDocument: 'after' }).select('-password');
     if (!user) return res.status(404).json({ message: 'Introuvable' });
     res.json(user);
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -423,3 +423,4 @@ exports.clearNotifications = async (req, res) => {
   try { await Notification.deleteMany({ userId: req.user.id, lu: true }); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ message: e.message }); }
 };
+

@@ -59,3 +59,4 @@ const initMvolaPaiement = async ({ amount, phoneNumber, reference, description }
 };
 
 module.exports = { initMvolaPaiement };
+

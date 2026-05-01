@@ -30,3 +30,4 @@ router.get('/users',          requireAdmin, getUsers);
 router.put('/users/:id/role', requireAdmin, updateUserRole);
 
 module.exports = router;
+

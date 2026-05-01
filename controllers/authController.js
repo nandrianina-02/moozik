@@ -89,7 +89,7 @@ exports.updateAdmin = async (req, res) => {
     if (nom !== undefined) update.nom = nom;
     if (email) update.email = email;
     if (password?.length >= 6) update.password = await bcrypt.hash(password, 12);
-    res.json(await Admin.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password'));
+    res.json(await Admin.findByIdAndUpdate(req.params.id, update, { returnDocument: 'after' }).select('-password'));
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
@@ -151,7 +151,7 @@ exports.updateUser = async (req, res) => {
       const r = await toCloud(req.file.buffer, { folder: 'moozik/avatars', resource_type: 'image', transformation: AVT_TRANSFORM });
       update.avatar = r.secure_url; update.avatarPublicId = r.public_id;
     }
-    const user = await User.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
+    const user = await User.findByIdAndUpdate(req.params.id, update, { returnDocument: 'after' }).select('-password');
     if (!user) return res.status(404).json({ message: 'Introuvable' });
     res.json(user);
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -265,7 +265,7 @@ exports.updateArtist = async (req, res) => {
       const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
       update.image = r.secure_url; update.imagePublicId = r.public_id;
     }
-    res.json(await Artist.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password'));
+    res.json(await Artist.findByIdAndUpdate(req.params.id, update, { returnDocument: 'after' }).select('-password'));
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
@@ -280,7 +280,7 @@ exports.updateArtistMe = async (req, res) => {
       const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
       update.image = r.secure_url; update.imagePublicId = r.public_id;
     }
-    res.json(await Artist.findByIdAndUpdate(req.user.id, update, { new: true }).select('-password'));
+    res.json(await Artist.findByIdAndUpdate(req.user.id, update, { returnDocument: 'after' }).select('-password'));
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
@@ -308,3 +308,4 @@ exports.changeArtistPassword = async (req, res) => {
     res.json({ message: 'Mot de passe mis à jour' });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
+
