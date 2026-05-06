@@ -1,27 +1,27 @@
-const mongoose       = require('mongoose');
-const { Royalty, ArtistPayout, Tip } = require('../models/monetisationModels');
-const Play           = require('../models/Play');
-// Champ canonical du schema : artisteId (avec e)
+const mongoose   = require('mongoose');
+const { Royalty } = require('../models/monetisationModels');
+const { ArtistPayout } = require('../models/monetisationModels');
+const Play       = require('../models/Play');
 
 // ─────────────────────────────────────────────
 // GET /artists/:id/royalties
 // ─────────────────────────────────────────────
 exports.getArtistRoyalties = async (req, res) => {
   try {
-    const artistId = req.params.id;
+    const artisteId = req.params.id;
 
-    const royalties = await Royalty.find({ artistId })
-        .populate('artistId', 'nom image')
+    const royalties = await Royalty.find({ artisteId })
       .sort({ period: -1 })
       .limit(12)
       .lean();
 
-    const payout = await ArtistPayout.findOne({ artistId }).lean();
+    const payout = await ArtistPayout.findOne({ artisteId }).lean();
 
     let totalTipsEuros = '0.00';
     try {
+      const Tip = require('../models/monetisationModels').Tip;
       const agg = await Tip.aggregate([
-        { $match: { toArtistId: new mongoose.Types.ObjectId(artistId) } },
+        { $match: { toArtistId: new mongoose.Types.ObjectId(artisteId) } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]);
       totalTipsEuros = ((agg[0]?.total || 0) / 100).toFixed(2);
@@ -53,7 +53,7 @@ exports.savePayoutInfo = async (req, res) => {
   try {
     const { paypalEmail, mobileMoneyPhone, mobileMoneyProvider } = req.body;
     const updated = await ArtistPayout.findOneAndUpdate(
-      { artistId: req.params.id },
+      { artisteId: req.params.id },
       { paypalEmail, mobileMoneyPhone, mobileMoneyProvider },
       { upsert: true, new: true }
     );
@@ -65,11 +65,27 @@ exports.savePayoutInfo = async (req, res) => {
 
 // ─────────────────────────────────────────────
 // GET /admin/royalties?period=2026-05
-// Supprimée — gérée dans monetisationRoutes.js
-// Si tu veux la garder ici, décommente ci-dessous
-// ET supprime la route dans monetisationRoutes.js
 // ─────────────────────────────────────────────
-// exports.getAdminRoyalties = async (req, res) => { ... };
+exports.getAdminRoyalties = async (req, res) => {
+  try {
+    const period = req.query.period || new Date().toISOString().slice(0, 7);
+
+    const royalties = await Royalty.find({ period })
+      .populate('artisteId', 'nom image')
+      .sort({ revenue: -1 })
+      .lean();
+
+    const totalCents = royalties.reduce((s, r) => s + (r.revenue || 0), 0);
+
+    res.json({
+      period,
+      royalties,
+      totalEuros: (totalCents / 100).toFixed(2),
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
 
 // ─────────────────────────────────────────────
 // POST /admin/royalties/payout
@@ -80,9 +96,9 @@ exports.triggerPayout = async (req, res) => {
 
     const pending = await Royalty.find({
       period,
-      status:  'pending',
+      status: 'pending',
       revenue: { $gt: 0 },
-    }).populate('artistId', 'nom image').lean();
+    }).populate('artisteId').lean();
 
     if (pending.length === 0) {
       return res.json({ message: `Aucune royaltie en attente pour ${period}` });
@@ -96,7 +112,7 @@ exports.triggerPayout = async (req, res) => {
       });
 
       await ArtistPayout.findOneAndUpdate(
-        { artistId: royalty.artistId._id },
+        { artisteId: royalty.artisteId._id },
         {
           $inc: {
             pendingBalance: royalty.revenue,
