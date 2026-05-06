@@ -146,20 +146,34 @@ exports.upload = async (req, res) => {
     const audioBuf = req.files['audio']?.[0]?.buffer;
     const imgBuf   = req.files['image']?.[0]?.buffer;
     const origName = req.files['audio']?.[0]?.originalname || 'track.mp3';
-    if (!audioBuf) return res.status(400).json({ message: 'Fichier audio manquant' });
+    const srcUrl   = req.body.src?.trim();
+
+    if (!audioBuf && !srcUrl)
+      return res.status(400).json({ message: 'Fichier audio manquant' });
 
     const isArtist  = req.user.role === 'artist';
     const artisteId = isArtist ? req.user.id : (req.body.artisteId || null);
     let artisteName = 'Artiste Local';
     if (isArtist) artisteName = req.user.nom;
-    else if (artisteId) { const a = await Artist.findById(artisteId); if (a) artisteName = a.nom; }
-    else if (req.body.artiste) artisteName = req.body.artiste;
+    else if (artisteId) {
+      const a = await Artist.findById(artisteId);
+      if (a) artisteName = a.nom;
+    } else if (req.body.artiste) {
+      artisteName = req.body.artiste;
+    }
 
-    const audioResult = await toCloud(audioBuf, { folder: 'moozik/audio', resource_type: 'video', format: 'mp3' });
-    let imageUrl = `https://api.dicebear.com/7.x/shapes/svg?seed=${audioResult.public_id}`, imagePublicId = '';
+    // Upload audio : buffer ou URL externe
+    const audioResult = audioBuf
+      ? await toCloud(audioBuf, { folder: 'moozik/audio', resource_type: 'video', format: 'mp3' })
+      : await toCloud(srcUrl,   { folder: 'moozik/audio', resource_type: 'video', format: 'mp3' });
+
+    // Upload image si fournie, sinon avatar généré
+    let imageUrl      = `https://api.dicebear.com/7.x/shapes/svg?seed=${audioResult.public_id}`;
+    let imagePublicId = '';
     if (imgBuf) {
-      const ir = await toCloud(imgBuf, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
-      imageUrl = ir.secure_url; imagePublicId = ir.public_id;
+      const ir  = await toCloud(imgBuf, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
+      imageUrl      = ir.secure_url;
+      imagePublicId = ir.public_id;
     }
 
     const count   = await Song.countDocuments();
@@ -179,14 +193,19 @@ exports.upload = async (req, res) => {
     const users = await User.find().select('_id');
     if (users.length) {
       await Notification.insertMany(users.map(u => ({
-        userId: u._id, type: 'new_song',
-        titre: `🎵 Nouveau titre : ${newSong.titre}`,
+        userId:  u._id,
+        type:    'new_song',
+        titre:   `🎵 Nouveau titre : ${newSong.titre}`,
         message: `${artisteName} vient d'ajouter une nouvelle musique`,
-        songId: newSong._id,
+        songId:  newSong._id,
       })));
     }
+
     res.json(newSong);
-  } catch (e) { console.error('Upload error:', e); res.status(500).json({ message: e.message }); }
+  } catch (e) {
+    console.error('Upload error:', e);
+    res.status(500).json({ message: e.message });
+  }
 };
 
 // ── PUT /songs/:id ────────────────────────────
