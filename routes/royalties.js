@@ -27,4 +27,15 @@ router.post('/admin/royalties/calculate', requireAdmin, async (req, res) => {
   }
 });
 
+router.get('/admin/royalties/plays-debug', requireAdmin, async (req, res) => {
+  const Play = require('../models/Play');
+  const period = req.query.period || new Date().toISOString().slice(0, 7);
+  const total     = await Play.countDocuments({});
+  const thisPeriod = await Play.countDocuments({ period });
+  const uncounted  = await Play.countDocuments({ period, counted: false });
+  const withArtist = await Play.countDocuments({ period, artisteId: { $ne: null } });
+  const sample     = await Play.find({}).limit(3).lean();
+  res.json({ total, thisPeriod, uncounted, withArtist, sample });
+});
+
 module.exports = router;

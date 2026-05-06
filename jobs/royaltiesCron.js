@@ -57,18 +57,18 @@ const calculateRoyalties = async (period) => {
       const fromPremium = Math.round(data.premium * RATE_PREMIUM * 100);
       const fromSales   = purchaseByArtist[artisteId] || 0;
 
-      const netRevenue = Math.round(
+      const netRevenue = Math.ceil(
         (fromFree + fromPremium) * (1 - PLATFORM_CUT) + fromSales
       );
 
-      if (netRevenue <= 0) continue;
+      if (netRevenue < 0) continue;
 
+      // ✅ artistId dans Royalty (monetisationModels.js)
       await Royalty.findOneAndUpdate(
-        { artisteId, period },
+        { artistId: artisteId, period },
         {
           $inc: {
             plays:               data.totalPlays,
-            'sources.free':      fromFree,
             'sources.premium':   fromPremium,
             'sources.purchases': fromSales,
             revenue:             netRevenue,
@@ -78,6 +78,7 @@ const calculateRoyalties = async (period) => {
         { upsert: true, new: true }
       );
 
+      // ✅ artisteId dans PayoutInfo
       await PayoutInfo.findOneAndUpdate(
         { artisteId },
         { $inc: { pendingBalance: netRevenue, totalEarned: netRevenue } },
