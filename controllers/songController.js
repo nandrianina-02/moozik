@@ -162,16 +162,24 @@ exports.upload = async (req, res) => {
       artisteName = req.body.artiste;
     }
 
-    // Upload audio : buffer ou URL externe
-    const audioResult = audioBuf
-      ? await toCloud(audioBuf, { folder: 'moozik/audio', resource_type: 'video', format: 'mp3' })
-      : await toCloud(srcUrl,   { folder: 'moozik/audio', resource_type: 'video', format: 'mp3' });
+    // Audio : upload Cloudinary ou URL directe
+    let audioResult = { secure_url: '', public_id: '' };
+    if (audioBuf) {
+      audioResult = await toCloud(audioBuf, {
+        folder: 'moozik/audio', resource_type: 'video', format: 'mp3'
+      });
+    } else {
+      audioResult.secure_url = srcUrl;
+      audioResult.public_id  = '';
+    }
 
-    // Upload image si fournie, sinon avatar généré
-    let imageUrl      = `https://api.dicebear.com/7.x/shapes/svg?seed=${audioResult.public_id}`;
+    // Image : upload Cloudinary ou avatar généré
+    let imageUrl      = `https://api.dicebear.com/7.x/shapes/svg?seed=${Date.now()}`;
     let imagePublicId = '';
     if (imgBuf) {
-      const ir  = await toCloud(imgBuf, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
+      const ir  = await toCloud(imgBuf, {
+        folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM
+      });
       imageUrl      = ir.secure_url;
       imagePublicId = ir.public_id;
     }
@@ -187,11 +195,9 @@ exports.upload = async (req, res) => {
       image:         imageUrl,
       imagePublicId,
       ordre:         count,
-      annee:         req.body.annee     || null,   // ← ajout
-      genre:         req.body.genre     || null,   // ← ajout
-      moods:         req.body.moods
-                      ? JSON.parse(req.body.moods)
-                      : [],                        // ← ajout (envoyé en JSON.stringify côté frontend)
+      annee:         req.body.annee ? Number(req.body.annee) : null,
+      genre:         req.body.genre || null,
+      moods:         req.body.moods ? JSON.parse(req.body.moods) : [],
     }).save();
 
     // Notifier tous les utilisateurs
