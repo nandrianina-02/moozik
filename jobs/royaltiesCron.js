@@ -1,94 +1,135 @@
 const cron     = require('node-cron');
 const mongoose = require('mongoose');
 const Play     = require('../models/Play');
-const { Royalty } = require('../models/monetisationModels');
-const PayoutInfo  = require('../models/PayoutInfo');
+const { Royalty, Purchase, ArtistPayout } = require('../models/monetisationModels');
 
-const RATE_FREE    = 0.001;
-const RATE_PREMIUM = 0.004;
-const PLATFORM_CUT = 0.20;
+// ─── Constantes ───────────────────────────────────────────────────────────────
 
+const RATE_FREE    = 0.001; // € par écoute gratuite
+const RATE_PREMIUM = 0.004; // € par écoute premium
+const PLATFORM_CUT = 0.20;  // 20 % de commission plateforme
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Retourne la période du mois précédent au format "YYYY-MM". */
 const previousPeriod = () => {
   const d = new Date();
   d.setMonth(d.getMonth() - 1);
   return d.toISOString().slice(0, 7);
 };
 
+/** Convertit des euros en centimes entiers (arrondi au supérieur). */
+const toCents = (euros) => Math.ceil(euros * 100);
+
+// ─── Calcul des royalties ─────────────────────────────────────────────────────
+
+/**
+ * Calcule et enregistre les royalties pour la période donnée.
+ * Utilise une transaction pour garantir la cohérence Royalty ↔ ArtistPayout.
+ *
+ * @param {string} period  Format "YYYY-MM"
+ * @returns {{ processed: number, period: string }}
+ */
 const calculateRoyalties = async (period) => {
   console.log(`[ROYALTIES] ▶ Calcul pour ${period}...`);
 
+  // ── 1. Agrégation des écoutes non comptabilisées ───────────────────────────
+  const playAgg = await Play.aggregate([
+    {
+      $match: {
+        period,
+        counted:   false,
+        artisteId: { $ne: null },
+      },
+    },
+    {
+      $group: {
+        _id:   { artisteId: '$artisteId', isPremium: '$isPremium' },
+        count: { $sum: 1 },
+      },
+    },
+  ]);
+
+  if (playAgg.length === 0) {
+    console.log(`[ROYALTIES] Aucune écoute à traiter pour ${period}`);
+    return { processed: 0, period };
+  }
+
+  // ── 2. Regroupement par artiste ────────────────────────────────────────────
+  const byArtist = {};
+  for (const row of playAgg) {
+    const aid = String(row._id.artisteId);
+    if (!byArtist[aid]) byArtist[aid] = { free: 0, premium: 0, totalPlays: 0 };
+    if (row._id.isPremium) byArtist[aid].premium += row.count;
+    else                   byArtist[aid].free    += row.count;
+    byArtist[aid].totalPlays += row.count;
+  }
+
+  // ── 3. Agrégation des ventes (part artiste déjà calculée à l'achat) ────────
+  const salesByArtist = {};
   try {
-    const plays = await Play.aggregate([
-      { $match: { period, counted: false, artisteId: { $ne: null } } },
+    const salesAgg = await Purchase.aggregate([
+      {
+        $match: {
+          period,
+          counted:   { $ne: true },
+          artisteId: { $ne: null },
+        },
+      },
       {
         $group: {
-          _id: { artisteId: '$artisteId', isPremium: '$isPremium' },
-          count: { $sum: 1 },
+          _id:   '$artisteId',
+          total: { $sum: '$artistShare' }, // centimes, calculés à l'achat
         },
       },
     ]);
+    for (const row of salesAgg) salesByArtist[String(row._id)] = row.total;
+  } catch (err) {
+    console.warn('[ROYALTIES] ⚠ Impossible de charger les ventes:', err.message);
+  }
 
-    if (plays.length === 0) {
-      console.log(`[ROYALTIES] Aucune écoute à traiter pour ${period}`);
-      return { processed: 0, period };
-    }
+  // ── 4. Écriture avec transaction ───────────────────────────────────────────
+  const session    = await mongoose.startSession();
+  const royaltyCol = Royalty.collection;
+  let processed    = 0;
+  const artistObjectIds = [];
 
-    const byArtist = {};
-    for (const p of plays) {
-      const aid = String(p._id.artisteId);
-      if (!byArtist[aid]) byArtist[aid] = { free: 0, premium: 0, totalPlays: 0 };
-      if (p._id.isPremium) byArtist[aid].premium += p.count;
-      else                 byArtist[aid].free    += p.count;
-      byArtist[aid].totalPlays += p.count;
-
-
-    }
-
-    const purchaseByArtist = {};
-    try {
-      const { Purchase } = require('../models/monetisationModels');
-      const purchases = await Purchase.aggregate([
-        { $match: { period, status: 'completed', artistId: { $ne: null } } },
-        { $group: { _id: '$artistId', total: { $sum: '$artistShare' } } },
-      ]);
-      for (const p of purchases) purchaseByArtist[String(p._id)] = p.total;
-    } catch (_) {}
-
-    const col = Royalty.collection;
-    let processed = 0;
+  try {
+    session.startTransaction();
 
     for (const [artisteId, data] of Object.entries(byArtist)) {
-        const fromFree    = Math.ceil(data.free    * RATE_FREE    * 100);
-        const fromPremium = Math.ceil(data.premium * RATE_PREMIUM * 100);
-        const fromSales   = purchaseByArtist[artisteId] || 0;
+      const fromFree    = toCents(data.free    * RATE_FREE);
+      const fromPremium = toCents(data.premium * RATE_PREMIUM);
+      const fromSales   = salesByArtist[artisteId] ?? 0; // déjà en centimes
 
-      const netRevenue = Math.ceil(
-        (fromFree + fromPremium) * (1 - PLATFORM_CUT) + fromSales
-      );
+      // Revenus nets : streaming après commission + ventes sans commission
+      const netRevenue =
+        toCents((data.free * RATE_FREE + data.premium * RATE_PREMIUM) * (1 - PLATFORM_CUT))
+        + fromSales;
 
-      if (netRevenue < 0) continue;
+      if (netRevenue <= 0) continue;
 
-      // Bypass strict mode — accès direct MongoDB
-      const result = await col.updateOne(
-        {
-          artistId: new mongoose.Types.ObjectId(artisteId),
-          period,
-        },
+      const artisteObjId = new mongoose.Types.ObjectId(artisteId);
+      artistObjectIds.push(artisteObjId);
+
+      // Upsert Royalty — accès direct collection pour contourner le strict mode
+      await royaltyCol.updateOne(
+        { artisteId: artisteObjId, period },
         {
           $setOnInsert: { status: 'pending', currency: 'EUR' },
           $inc: {
             plays:               data.totalPlays,
+            'sources.free':      fromFree,
             'sources.premium':   fromPremium,
             'sources.purchases': fromSales,
             revenue:             netRevenue,
           },
         },
-        { upsert: true }
+        { upsert: true, session },
       );
 
-
-      // Mettre à jour le solde artiste
-      await PayoutInfo.updateOne(
+      // Upsert ArtistPayout (modèle fusionné)
+      await ArtistPayout.updateOne(
         { artisteId },
         {
           $setOnInsert: { artisteId },
@@ -97,31 +138,54 @@ const calculateRoyalties = async (period) => {
             totalEarned:    netRevenue,
           },
         },
-        { upsert: true }
+        { upsert: true, session },
       );
 
       processed++;
     }
 
+    // ── 5. Marquer uniquement les écoutes des artistes traités ────────────────
     const { modifiedCount } = await Play.updateMany(
-      { period, counted: false },
-      { $set: { counted: true } }
+      {
+        period,
+        counted:   false,
+        artisteId: { $in: artistObjectIds },
+      },
+      { $set: { counted: true } },
+      { session },
     );
 
-    console.log(`[ROYALTIES] ✅ ${processed} artiste(s), ${modifiedCount} écoutes marquées`);
-    return { processed, period };
+    await session.commitTransaction();
+    console.log(`[ROYALTIES] ✅ ${processed} artiste(s), ${modifiedCount} écoute(s) marquée(s)`);
 
-  } catch (e) {
-    console.error('[ROYALTIES] ❌ Erreur:', e);
-    throw e;
+  } catch (err) {
+    await session.abortTransaction();
+    console.error('[ROYALTIES] ❌ Transaction annulée:', err);
+    throw err;
+
+  } finally {
+    session.endSession();
   }
+
+  return { processed, period };
 };
 
+// ─── Cron ─────────────────────────────────────────────────────────────────────
+
+/** Planifie le calcul des royalties le 1er de chaque mois à 02:00 UTC. */
 const startRoyaltiesCron = () => {
-  cron.schedule('0 2 1 * *', async () => {
-    const period = previousPeriod();
-    await calculateRoyalties(period);
-  }, { timezone: 'UTC' });
+  cron.schedule(
+    '0 2 1 * *',
+    async () => {
+      const period = previousPeriod();
+      try {
+        await calculateRoyalties(period);
+      } catch {
+        process.exitCode = 1;
+      }
+    },
+    { timezone: 'UTC' },
+  );
 
   console.log('[ROYALTIES] ⏰ Cron planifié — 1er du mois à 02:00 UTC');
 };
