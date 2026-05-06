@@ -1,6 +1,6 @@
 const mongoose   = require('mongoose');
 const { Royalty } = require('../models/monetisationModels');
-const { ArtistPayout } = require('../models/monetisationModels');
+const PayoutInfo = require('../models/PayoutInfo');
 const Play       = require('../models/Play');
 
 // ─────────────────────────────────────────────
@@ -15,7 +15,7 @@ exports.getArtistRoyalties = async (req, res) => {
       .limit(12)
       .lean();
 
-    const payout = await ArtistPayout.findOne({ artisteId }).lean();
+    const payout = await PayoutInfo.findOne({ artisteId }).lean();
 
     let totalTipsEuros = '0.00';
     try {
@@ -52,7 +52,7 @@ exports.getArtistRoyalties = async (req, res) => {
 exports.savePayoutInfo = async (req, res) => {
   try {
     const { paypalEmail, mobileMoneyPhone, mobileMoneyProvider } = req.body;
-    const updated = await ArtistPayout.findOneAndUpdate(
+    const updated = await PayoutInfo.findOneAndUpdate(
       { artisteId: req.params.id },
       { paypalEmail, mobileMoneyPhone, mobileMoneyProvider },
       { upsert: true, new: true }
@@ -111,7 +111,7 @@ exports.triggerPayout = async (req, res) => {
         paidAt: new Date(),
       });
 
-      await ArtistPayout.findOneAndUpdate(
+      await PayoutInfo.findOneAndUpdate(
         { artisteId: royalty.artisteId._id },
         {
           $inc: {
