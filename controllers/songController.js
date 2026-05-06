@@ -187,6 +187,11 @@ exports.upload = async (req, res) => {
       image:         imageUrl,
       imagePublicId,
       ordre:         count,
+      annee:         req.body.annee     || null,   // ← ajout
+      genre:         req.body.genre     || null,   // ← ajout
+      moods:         req.body.moods
+                      ? JSON.parse(req.body.moods)
+                      : [],                        // ← ajout (envoyé en JSON.stringify côté frontend)
     }).save();
 
     // Notifier tous les utilisateurs
