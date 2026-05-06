@@ -38,4 +38,11 @@ router.get('/admin/royalties/plays-debug', requireAdmin, async (req, res) => {
   res.json({ total, thisPeriod, uncounted, withArtist, sample });
 });
 
+router.post('/admin/royalties/reset-plays', requireAdmin, async (req, res) => {
+  const Play = require('../models/Play');
+  const period = req.body.period || new Date().toISOString().slice(0, 7);
+  const result = await Play.updateMany({ period }, { $set: { counted: false } });
+  res.json({ reset: result.modifiedCount, period });
+});
+
 module.exports = router;

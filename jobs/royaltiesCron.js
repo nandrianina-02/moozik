@@ -1,7 +1,8 @@
-const cron       = require('node-cron');
-const Play       = require('../models/Play');
+const cron     = require('node-cron');
+const mongoose = require('mongoose');
+const Play     = require('../models/Play');
 const { Royalty } = require('../models/monetisationModels');
-const PayoutInfo = require('../models/PayoutInfo');
+const PayoutInfo  = require('../models/PayoutInfo');
 
 const RATE_FREE    = 0.001;
 const RATE_PREMIUM = 0.004;
@@ -39,6 +40,8 @@ const calculateRoyalties = async (period) => {
       if (p._id.isPremium) byArtist[aid].premium += p.count;
       else                 byArtist[aid].free    += p.count;
       byArtist[aid].totalPlays += p.count;
+
+
     }
 
     const purchaseByArtist = {};
@@ -51,11 +54,13 @@ const calculateRoyalties = async (period) => {
       for (const p of purchases) purchaseByArtist[String(p._id)] = p.total;
     } catch (_) {}
 
+    const col = Royalty.collection;
     let processed = 0;
+
     for (const [artisteId, data] of Object.entries(byArtist)) {
-      const fromFree    = Math.round(data.free    * RATE_FREE    * 100);
-      const fromPremium = Math.round(data.premium * RATE_PREMIUM * 100);
-      const fromSales   = purchaseByArtist[artisteId] || 0;
+        const fromFree    = Math.ceil(data.free    * RATE_FREE    * 100);
+        const fromPremium = Math.ceil(data.premium * RATE_PREMIUM * 100);
+        const fromSales   = purchaseByArtist[artisteId] || 0;
 
       const netRevenue = Math.ceil(
         (fromFree + fromPremium) * (1 - PLATFORM_CUT) + fromSales
@@ -63,25 +68,35 @@ const calculateRoyalties = async (period) => {
 
       if (netRevenue < 0) continue;
 
-      // ✅ artistId dans Royalty (monetisationModels.js)
-      await Royalty.findOneAndUpdate(
-        { artistId: artisteId, period },
+      // Bypass strict mode — accès direct MongoDB
+      const result = await col.updateOne(
         {
+          artistId: new mongoose.Types.ObjectId(artisteId),
+          period,
+        },
+        {
+          $setOnInsert: { status: 'pending', currency: 'EUR' },
           $inc: {
             plays:               data.totalPlays,
             'sources.premium':   fromPremium,
             'sources.purchases': fromSales,
             revenue:             netRevenue,
           },
-          $setOnInsert: { status: 'pending' },
         },
-        { upsert: true, new: true }
+        { upsert: true }
       );
 
-      // ✅ artisteId dans PayoutInfo
-      await PayoutInfo.findOneAndUpdate(
+
+      // Mettre à jour le solde artiste
+      await PayoutInfo.updateOne(
         { artisteId },
-        { $inc: { pendingBalance: netRevenue, totalEarned: netRevenue } },
+        {
+          $setOnInsert: { artisteId },
+          $inc: {
+            pendingBalance: netRevenue,
+            totalEarned:    netRevenue,
+          },
+        },
         { upsert: true }
       );
 
