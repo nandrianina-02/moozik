@@ -20,6 +20,8 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 const radioRoutes = require('./routes/radioRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const tsComments = require('./routes/timestampCommentRoutes');
+const { startRoyaltiesCron } = require('./jobs/royaltiesCron');
+const royaltiesRoutes        = require('./routes/royalties');
 
 // ── CORS ──────────────────────────────────────
 const cors = require('cors');
@@ -44,7 +46,7 @@ app.use(express.json());
 
 // ── MongoDB ───────────────────────────────────
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => { console.log('✅ MongoDB connecté'); createIndexes(); })
+  .then(() => { console.log('✅ MongoDB connecté'); createIndexes(); startRoyaltiesCron();})
   .catch(err => console.error('❌ MongoDB :', err));
 
 // ── Routes ────────────────────────────────────
@@ -59,6 +61,7 @@ app.use('/', analyticsRoutes);
 app.use('/', radioRoutes);
 app.use('/admin', adminRoutes);
 app.use('/', tsComments);
+app.use('/', royaltiesRoutes);
 
 
 // ── Health check ──────────────────────────────

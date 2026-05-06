@@ -1,4 +1,7 @@
 const mongoose = require('mongoose');
+const { Royalty } = require('../models/monetisationModels');
+const Play       = require('./Play');
+const PayoutInfo = require('./PayoutInfo');
 
 // ── Artist ────────────────────────────────────
 const ArtistSchema = new mongoose.Schema({
@@ -186,6 +189,6 @@ module.exports = {
   Artist, Album, Song, Admin, User, Playlist, UserPlaylist,
   Comment, Reaction, UserPlay, UserFavorite, History, Notification,
   ShareHistory, createIndexes,Lyrics, Certification, SmartLink, Featuring,
-  ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription,
+  ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription, Royalty, Play, PayoutInfo,
 };
 
