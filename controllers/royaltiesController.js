@@ -17,15 +17,14 @@ exports.getArtistRoyalties = async (req, res) => {
 
     const payout = await PayoutInfo.findOne({ artisteId }).lean();
 
-    // Total des pourboires reçus
     let totalTipsEuros = '0.00';
     try {
-      const Tip = require('../models/Tip');
+      const Tip = require('../models/monetisationModels').Tip;
       const agg = await Tip.aggregate([
-        { $match: { artisteId: mongoose.Types.ObjectId(artisteId) } },
+        { $match: { toArtistId: new mongoose.Types.ObjectId(artisteId) } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ]);
-      totalTipsEuros = (agg[0]?.total || 0).toFixed(2);
+      totalTipsEuros = ((agg[0]?.total || 0) / 100).toFixed(2);
     } catch (_) {}
 
     res.json({
@@ -65,7 +64,7 @@ exports.savePayoutInfo = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────
-// GET /admin/royalties?period=2025-01
+// GET /admin/royalties?period=2026-05
 // ─────────────────────────────────────────────
 exports.getAdminRoyalties = async (req, res) => {
   try {
@@ -122,12 +121,6 @@ exports.triggerPayout = async (req, res) => {
         },
         { upsert: true }
       );
-
-      // 👉 Ici : brancher Stripe Transfer ou PayDunya selon payoutInfo
-      // const info = await PayoutInfo.findOne({ artisteId: royalty.artisteId._id });
-      // if (info?.stripeAccountId) { ... }
-      // else if (info?.mobileMoneyPhone) { ... }
-
       versed++;
     }
 
