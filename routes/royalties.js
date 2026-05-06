@@ -13,7 +13,7 @@ router.get('/artists/:id/royalties', requireAuth, royCtrl.getArtistRoyalties);
 router.put('/artists/:id/payout',    requireAuth, royCtrl.savePayoutInfo);
 
 // ── Admin
-router.get('/admin/royalties',         requireAdmin, royCtrl.getAdminRoyalties);
+// GET /admin/royalties → géré dans monetisationRoutes.js
 router.post('/admin/royalties/payout', requireAdmin, royCtrl.triggerPayout);
 
 // ── Calcul manuel (test)
@@ -28,21 +28,29 @@ router.post('/admin/royalties/calculate', requireAdmin, async (req, res) => {
 });
 
 router.get('/admin/royalties/plays-debug', requireAdmin, async (req, res) => {
-  const Play = require('../models/Play');
-  const period = req.query.period || new Date().toISOString().slice(0, 7);
-  const total     = await Play.countDocuments({});
-  const thisPeriod = await Play.countDocuments({ period });
-  const uncounted  = await Play.countDocuments({ period, counted: false });
-  const withArtist = await Play.countDocuments({ period, artisteId: { $ne: null } });
-  const sample     = await Play.find({}).limit(3).lean();
-  res.json({ total, thisPeriod, uncounted, withArtist, sample });
+  try {
+    const Play = require('../models/Play');
+    const period     = req.query.period || new Date().toISOString().slice(0, 7);
+    const total      = await Play.countDocuments({});
+    const thisPeriod = await Play.countDocuments({ period });
+    const uncounted  = await Play.countDocuments({ period, counted: false });
+    const withArtist = await Play.countDocuments({ period, artisteId: { $ne: null } });
+    const sample     = await Play.find({}).limit(3).lean();
+    res.json({ total, thisPeriod, uncounted, withArtist, sample });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
 });
 
 router.post('/admin/royalties/reset-plays', requireAdmin, async (req, res) => {
-  const Play = require('../models/Play');
-  const period = req.body.period || new Date().toISOString().slice(0, 7);
-  const result = await Play.updateMany({ period }, { $set: { counted: false } });
-  res.json({ reset: result.modifiedCount, period });
+  try {
+    const Play   = require('../models/Play');
+    const period = req.body.period || new Date().toISOString().slice(0, 7);
+    const result = await Play.updateMany({ period }, { $set: { counted: false } });
+    res.json({ reset: result.modifiedCount, period });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
 });
 
 module.exports = router;

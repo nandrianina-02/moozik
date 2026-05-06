@@ -330,7 +330,7 @@ router.post('/artists/:id/tip', requireAuth, async (req, res) => {
     }).save();
 
     if (provider === 'stripe') {
-      const payout = await ArtistPayout.findOne({ artistId: req.params.id });
+      const payout = await ArtistPayout.findOne({ artisteId: req.params.id });
       const paymentIntent = await stripe.paymentIntents.create({
         amount:               toCents(amount),
         currency:             currency.toLowerCase(),
@@ -416,10 +416,10 @@ router.get('/artists/:id/royalties', requireAdminOrArtist, async (req, res) => {
     if (req.user.role === 'artist' && String(req.user.id) !== String(req.params.id))
       return res.status(403).json({ message: 'Accès refusé' });
 
-    const royalties = await Royalty.find({ artistId: req.params.id })
+    const royalties = await Royalty.find({ artisteId: req.params.id })
       .sort({ period: -1 })
       .limit(12);
-    const payout    = await ArtistPayout.findOne({ artistId: req.params.id });
+    const payout    = await ArtistPayout.findOne({ artisteId: req.params.id });
     const totalTips = (await Tip.find({ toArtistId: req.params.id, status: 'completed' }))
       .reduce((s, t) => s + t.amount, 0);
 
@@ -435,9 +435,9 @@ router.put('/artists/:id/payout', requireAdminOrArtist, async (req, res) => {
 
     const { paypalEmail, mobileMoneyPhone, mobileMoneyProvider } = req.body;
     const payout = await ArtistPayout.findOneAndUpdate(
-      { artistId: req.params.id },
+      { artisteId: req.params.id },
       {
-        artistId: req.params.id,
+        artisteId: req.params.id,
         paypalEmail:           paypalEmail           || '',
         mobileMoneyPhone:      mobileMoneyPhone      || '',
         mobileMoneyProvider:   mobileMoneyProvider   || 'none',
@@ -455,7 +455,7 @@ router.post('/artists/:id/stripe-connect', requireAdminOrArtist, async (req, res
       return res.status(403).json({ message: 'Accès refusé' });
 
     const artist = await Artist.findById(req.params.id);
-    let payout   = await ArtistPayout.findOne({ artistId: req.params.id });
+    let payout   = await ArtistPayout.findOne({ artisteId: req.params.id });
 
     if (!payout?.stripeAccountId) {
       const account = await stripe.accounts.create({
@@ -464,8 +464,8 @@ router.post('/artists/:id/stripe-connect', requireAdminOrArtist, async (req, res
         capabilities: { transfers: { requested: true } },
       });
       payout = await ArtistPayout.findOneAndUpdate(
-        { artistId: req.params.id },
-        { artistId: req.params.id, stripeAccountId: account.id },
+        { artisteId: req.params.id },
+        { artisteId: req.params.id, stripeAccountId: account.id },
         { upsert: true, returnDocument: 'after' }
       );
     }
@@ -485,18 +485,18 @@ router.post('/admin/royalties/payout', requireAdmin, async (req, res) => {
   try {
     const { period = currentPeriod() } = req.body;
     const pending = await Royalty.find({ period, status: 'pending', revenue: { $gt: 0 } })
-      .populate('artistId', 'nom email');
+      .populate('artisteId', 'nom email');
 
     let paid = 0;
     for (const r of pending) {
-      const payout = await ArtistPayout.findOne({ artistId: r.artistId._id });
+      const payout = await ArtistPayout.findOne({ artisteId: r.artisteId._id });
       if (payout?.stripeAccountId) {
         try {
           const transfer = await stripe.transfers.create({
             amount:      r.revenue,
             currency:    'eur',
             destination: payout.stripeAccountId,
-            description: `Royalties MOOZIK ${period} — ${r.artistId.nom}`,
+            description: `Royalties MOOZIK ${period} — ${r.artisteId.nom}`,
           });
           await Royalty.findByIdAndUpdate(r._id, {
             status: 'paid', paidAt: new Date(), stripeTransferId: transfer.id,
@@ -506,7 +506,7 @@ router.post('/admin/royalties/payout', requireAdmin, async (req, res) => {
           });
           paid++;
         } catch (err) {
-          console.warn(`Virement échoué pour ${r.artistId.nom}:`, err.message);
+          console.warn(`Virement échoué pour ${r.artisteId.nom}:`, err.message);
         }
       } else {
         await Royalty.findByIdAndUpdate(r._id, { status: 'processing' });
@@ -524,7 +524,7 @@ router.get('/admin/royalties', requireAdmin, async (req, res) => {
   try {
     const period    = req.query.period || currentPeriod();
     const royalties = await Royalty.find({ period })
-      .populate('artistId', 'nom image')
+      .populate('artisteId', 'nom image')
       .sort({ revenue: -1 })
       .lean(); // .lean() évite les problèmes de .toObject() sur docs null
 
@@ -800,7 +800,7 @@ router.get('/tickets/scan/:qrCode', requireAdminOrArtist, async (req, res) => {
 router.get('/admin/events', requireAdmin, async (req, res) => {
   try {
     const events = await Event.find()
-      .populate('artistId', 'nom')
+      .populate('artisteId', 'nom')
       .sort({ date: -1 })
       .limit(50)
       .lean(); // ← FIX : plain objects, pas besoin de .toObject()
@@ -969,12 +969,12 @@ async function addToRoyalty(artistId, songId, source, amount, period) {
   if (!artistId || !amount) return;
   const inc = { revenue: amount, [`sources.${source}`]: amount };
   await Royalty.findOneAndUpdate(
-    { artistId, period },
-    { $inc: inc, $setOnInsert: { artistId, period } },
+    { artisteId: artistId, period },
+    { $inc: inc, $setOnInsert: { artisteId: artistId, period } },
     { upsert: true }
   );
   await ArtistPayout.findOneAndUpdate(
-    { artistId },
+    { artisteId: artistId },
     { $inc: { pendingBalance: amount, totalEarned: amount } },
     { upsert: true }
   );
