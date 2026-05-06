@@ -11,6 +11,7 @@ exports.getArtistRoyalties = async (req, res) => {
     const artistId = req.params.id;
 
     const royalties = await Royalty.find({ artistId })
+        .populate('artistId', 'nom image')
       .sort({ period: -1 })
       .limit(12)
       .lean();
@@ -81,7 +82,7 @@ exports.triggerPayout = async (req, res) => {
       period,
       status:  'pending',
       revenue: { $gt: 0 },
-    }).populate('artistId').lean();
+    }).populate('artistId', 'nom image').lean();
 
     if (pending.length === 0) {
       return res.json({ message: `Aucune royaltie en attente pour ${period}` });
