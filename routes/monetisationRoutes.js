@@ -522,11 +522,33 @@ router.post('/admin/royalties/payout', requireAdmin, async (req, res) => {
 // ────────────────────────────────────────────
 router.get('/admin/royalties', requireAdmin, async (req, res) => {
   try {
-    const period    = req.query.period || currentPeriod();
-    const royalties = await Royalty.find({ period })
-      .populate('artisteId', 'nom image')
-      .sort({ revenue: -1 })
-      .lean(); // .lean() évite les problèmes de .toObject() sur docs null
+    const period = req.query.period || currentPeriod();
+
+    const royalties = await Royalty.aggregate([
+      { $match: { period } },
+      { $sort: { revenue: -1 } },
+      {
+        $lookup: {
+          from:         'artists',
+          localField:   'artistId',
+          foreignField: '_id',
+          as:           'artisteId',
+        },
+      },
+      {
+        $addFields: {
+          artisteId: { $arrayElemAt: ['$artisteId', 0] },
+        },
+      },
+      {
+        $project: {
+          period: 1, plays: 1, revenue: 1, status: 1, sources: 1, currency: 1,
+          'artisteId._id': 1,
+          'artisteId.nom': 1,
+          'artisteId.image': 1,
+        },
+      },
+    ]);
 
     const total = royalties.reduce((s, r) => s + (r.revenue || 0), 0);
     res.json({ royalties, totalEuros: toEuros(total), period });
