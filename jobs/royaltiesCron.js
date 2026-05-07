@@ -27,6 +27,10 @@ const toCents = (euros) => Math.ceil(euros * 100);
  * Calcule et enregistre les royalties pour la période donnée.
  * Utilise une transaction pour garantir la cohérence Royalty ↔ ArtistPayout.
  *
+ * sources.free / sources.premium sont stockés en centimes NETS (après commission).
+ * sources.purchases est la part artiste déjà calculée à l'achat (nette).
+ * revenue = sources.free + sources.premium + sources.purchases + sources.tips
+ *
  * @param {string} period  Format "YYYY-MM"
  * @returns {{ processed: number, period: string }}
  */
@@ -79,7 +83,7 @@ const calculateRoyalties = async (period) => {
       {
         $group: {
           _id:   '$artisteId',
-          total: { $sum: '$artistShare' }, // centimes, calculés à l'achat
+          total: { $sum: '$artistShare' }, // centimes nets, calculés à l'achat
         },
       },
     ]);
@@ -98,14 +102,14 @@ const calculateRoyalties = async (period) => {
     session.startTransaction();
 
     for (const [artisteId, data] of Object.entries(byArtist)) {
-      const fromFree    = toCents(data.free    * RATE_FREE);
-      const fromPremium = toCents(data.premium * RATE_PREMIUM);
-      const fromSales   = salesByArtist[artisteId] ?? 0; // déjà en centimes
 
-      // Revenus nets : streaming après commission + ventes sans commission
-      const netRevenue =
-        toCents((data.free * RATE_FREE + data.premium * RATE_PREMIUM) * (1 - PLATFORM_CUT))
-        + fromSales;
+      // Revenus nets streaming après commission plateforme (en centimes)
+      const netFree    = toCents(data.free    * RATE_FREE    * (1 - PLATFORM_CUT));
+      const netPremium = toCents(data.premium * RATE_PREMIUM * (1 - PLATFORM_CUT));
+      const fromSales  = salesByArtist[artisteId] ?? 0; // déjà net en centimes
+
+      // Revenue total = streaming net + ventes nettes
+      const netRevenue = netFree + netPremium + fromSales;
 
       if (netRevenue <= 0) continue;
 
@@ -119,8 +123,9 @@ const calculateRoyalties = async (period) => {
           $setOnInsert: { status: 'pending', currency: 'EUR' },
           $inc: {
             plays:               data.totalPlays,
-            'sources.free':      fromFree,
-            'sources.premium':   fromPremium,
+            // sources stockent les montants NETS artiste en centimes
+            'sources.free':      netFree,
+            'sources.premium':   netPremium,
             'sources.purchases': fromSales,
             revenue:             netRevenue,
           },
@@ -149,6 +154,17 @@ const calculateRoyalties = async (period) => {
       {
         period,
         counted:   false,
+        artisteId: { $in: artistObjectIds },
+      },
+      { $set: { counted: true } },
+      { session },
+    );
+
+    // ── 6. Marquer les achats comptabilisés ────────────────────────────────────
+    await Purchase.updateMany(
+      {
+        period,
+        counted:   { $ne: true },
         artisteId: { $in: artistObjectIds },
       },
       { $set: { counted: true } },
