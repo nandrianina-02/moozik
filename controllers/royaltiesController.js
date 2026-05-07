@@ -1,7 +1,6 @@
 const mongoose   = require('mongoose');
-const { Royalty } = require('../models/monetisationModels');
-const PayoutInfo = require('../models/PayoutInfo');
-const Play       = require('../models/Play');
+const { Royalty, ArtistPayout, Tip } = require('../models/monetisationModels');
+const Play = require('../models/Play');
 
 // ─────────────────────────────────────────────
 // GET /artists/:id/royalties
@@ -15,11 +14,11 @@ exports.getArtistRoyalties = async (req, res) => {
       .limit(12)
       .lean();
 
-    const payout = await PayoutInfo.findOne({ artisteId }).lean();
+    // ✅ ArtistPayout (modèle fusionné) — plus PayoutInfo
+    const payout = await ArtistPayout.findOne({ artisteId }).lean();
 
     let totalTipsEuros = '0.00';
     try {
-      const Tip = require('../models/monetisationModels').Tip;
       const agg = await Tip.aggregate([
         { $match: { toArtistId: new mongoose.Types.ObjectId(artisteId) } },
         { $group: { _id: null, total: { $sum: '$amount' } } },
@@ -52,7 +51,9 @@ exports.getArtistRoyalties = async (req, res) => {
 exports.savePayoutInfo = async (req, res) => {
   try {
     const { paypalEmail, mobileMoneyPhone, mobileMoneyProvider } = req.body;
-    const updated = await PayoutInfo.findOneAndUpdate(
+
+    // ✅ ArtistPayout (modèle fusionné) — plus PayoutInfo
+    const updated = await ArtistPayout.findOneAndUpdate(
       { artisteId: req.params.id },
       { paypalEmail, mobileMoneyPhone, mobileMoneyProvider },
       { upsert: true, new: true }
@@ -71,7 +72,7 @@ exports.getAdminRoyalties = async (req, res) => {
     const period = req.query.period || new Date().toISOString().slice(0, 7);
 
     const royalties = await Royalty.find({ period })
-      .populate('artistId', 'nom image')
+      .populate('artisteId', 'nom image')  // ✅ artisteId (nom du champ dans le schéma)
       .sort({ revenue: -1 })
       .lean();
 
@@ -96,9 +97,11 @@ exports.triggerPayout = async (req, res) => {
 
     const pending = await Royalty.find({
       period,
-      status: 'pending',
+      status:  'pending',
       revenue: { $gt: 0 },
-    }).populate('artistId').lean();
+    })
+      .populate('artisteId', 'nom')  // ✅ artisteId
+      .lean();
 
     if (pending.length === 0) {
       return res.json({ message: `Aucune royaltie en attente pour ${period}` });
@@ -106,17 +109,19 @@ exports.triggerPayout = async (req, res) => {
 
     let versed = 0;
     for (const royalty of pending) {
+      // Passer en "processing" côté Royalty
       await Royalty.findByIdAndUpdate(royalty._id, {
         status: 'processing',
         paidAt: new Date(),
       });
 
-      await PayoutInfo.findOneAndUpdate(
+      // ✅ ArtistPayout (modèle fusionné) — décrémenter pendingBalance, incrémenter totalPaid
+      await ArtistPayout.findOneAndUpdate(
         { artisteId: royalty.artisteId._id },
         {
           $inc: {
-            pendingBalance: royalty.revenue,
-            totalEarned:    royalty.revenue,
+            pendingBalance: -royalty.revenue, // on débite ce qui part en virement
+            totalPaid:       royalty.revenue,
           },
         },
         { upsert: true }
