@@ -1,18 +1,18 @@
-/**
- * monetisationRoutes.js  — VERSION CORRIGÉE
+﻿/**
+ * monetisationRoutes.js  â€” VERSION CORRIGÃ‰E
  *
- * Corrections apportées :
- *  1. GET /admin/events      — .lean() au lieu de .toObject(), try/catch par event
- *  2. GET /admin/royalties   — try/catch renforcé + log d'erreur explicite
- *  3. calculateRoyalties     — supprimée de ce fichier (conflit avec royaltiesCron)
- *  4. cron.schedule          — supprimé de ce fichier (géré dans royaltiesCron)
- *  5. Require corrigé        — models importés proprement sans chemin relatif cassé
+ * Corrections apportÃ©es :
+ *  1. GET /admin/events      â€” .lean() au lieu de .toObject(), try/catch par event
+ *  2. GET /admin/royalties   â€” try/catch renforcÃ© + log d'erreur explicite
+ *  3. calculateRoyalties     â€” supprimÃ©e de ce fichier (conflit avec royaltiesCron)
+ *  4. cron.schedule          â€” supprimÃ© de ce fichier (gÃ©rÃ© dans royaltiesCron)
+ *  5. Require corrigÃ©        â€” models importÃ©s proprement sans chemin relatif cassÃ©
  *
  * Ajouter dans server.js :
  *   const monetisationRoutes = require('./routes/monetisationRoutes');
  *   app.use('/', monetisationRoutes);
  *
- * ⚠️  Supprimer GET /admin/royalties de royaltiesController.js pour éviter le conflit.
+ * âš ï¸  Supprimer GET /admin/royalties de royaltiesController.js pour Ã©viter le conflit.
  */
 
 const express = require('express');
@@ -35,7 +35,7 @@ const {
 } = require('../middleware/auth');
 const { upload } = require('../middleware/upload');
 
-// ── Helpers ───────────────────────────────────
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const PLATFORM_PERCENT = parseInt(process.env.STRIPE_PLATFORM_PERCENT || '20');
 const ROYALTY_PREMIUM  = parseFloat(process.env.ROYALTY_RATE_PREMIUM  || '0.004');
 const ROYALTY_FREE     = parseFloat(process.env.ROYALTY_RATE_FREE     || '0.001');
@@ -49,9 +49,9 @@ const isPremium = async (userId) => {
   return !!sub;
 };
 
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // 1. ABONNEMENTS FREEMIUM / PREMIUM
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 router.get('/plans', async (_req, res) => {
   try {
@@ -77,7 +77,7 @@ router.post('/subscriptions/checkout', requireAuth, async (req, res) => {
 
     const plan = await Plan.findById(planId);
     if (!plan) return res.status(404).json({ message: 'Plan introuvable' });
-    if (!plan.price) return res.status(400).json({ message: 'Plan gratuit — pas de paiement requis' });
+    if (!plan.price) return res.status(400).json({ message: 'Plan gratuit â€” pas de paiement requis' });
 
     const user = await User.findById(req.user.id);
 
@@ -110,7 +110,7 @@ router.post('/subscriptions/checkout', requireAuth, async (req, res) => {
     if (provider === 'paydunya') {
       const pd = await paydunyaInvoice({
         amount:      plan.price / 100,
-        description: `Abonnement MOOZIK Premium — ${plan.interval}`,
+        description: `Abonnement MOOZIK Premium â€” ${plan.interval}`,
         returnUrl:   `${process.env.FRONTEND_URL}/subscription/success`,
         cancelUrl:   `${process.env.FRONTEND_URL}/subscription/cancel`,
         meta: { userId: String(req.user.id), planId: String(plan._id), type: 'subscription' },
@@ -118,7 +118,7 @@ router.post('/subscriptions/checkout', requireAuth, async (req, res) => {
       return res.json({ url: pd.url, token: pd.token, provider: 'paydunya' });
     }
 
-    res.status(400).json({ message: 'Provider non supporté' });
+    res.status(400).json({ message: 'Provider non supportÃ©' });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
@@ -132,7 +132,7 @@ router.post('/subscriptions/cancel', requireAuth, async (req, res) => {
     sub.cancelAtPeriodEnd = true;
     sub.cancelledAt = new Date();
     await sub.save();
-    res.json({ message: 'Annulation programmée en fin de période', sub });
+    res.json({ message: 'Annulation programmÃ©e en fin de pÃ©riode', sub });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
@@ -167,20 +167,20 @@ router.get('/admin/subscriptions', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // 2. VENTE DE MUSIQUES (MP3 Download)
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 router.put('/songs/:id/price', requireAdminOrArtist, async (req, res) => {
   try {
     const song = await Song.findById(req.params.id);
     if (!song) return res.status(404).json({ message: 'Introuvable' });
     if (req.user.role === 'artist' && String(song.artisteId) !== String(req.user.id))
-      return res.status(403).json({ message: 'Accès refusé' });
+      return res.status(403).json({ message: 'AccÃ¨s refusÃ©' });
 
     const { price, currency = 'EUR', forSale = true, freePreviewSeconds = 30 } = req.body;
     if (forSale && (!price || price < 0.5))
-      return res.status(400).json({ message: 'Prix minimum 0,50 €' });
+      return res.status(400).json({ message: 'Prix minimum 0,50 â‚¬' });
 
     const sp = await SongPrice.findOneAndUpdate(
       { songId: req.params.id },
@@ -210,14 +210,14 @@ router.get('/songs/:id/price', optionalAuth, async (req, res) => {
 router.post('/songs/:id/purchase', requireAuth, async (req, res) => {
   try {
     const sp = await SongPrice.findOne({ songId: req.params.id, forSale: true });
-    if (!sp) return res.status(404).json({ message: 'Musique non disponible à la vente' });
+    if (!sp) return res.status(404).json({ message: 'Musique non disponible Ã  la vente' });
 
     const existing = await Purchase.findOne({
       userId: req.user.id,
       songId: req.params.id,
       status: 'completed',
     });
-    if (existing) return res.status(400).json({ message: 'Déjà acheté', downloadUrl: existing.downloadUrl });
+    if (existing) return res.status(400).json({ message: 'DÃ©jÃ  achetÃ©', downloadUrl: existing.downloadUrl });
 
     const song = await Song.findById(req.params.id);
     const user = await User.findById(req.user.id);
@@ -262,7 +262,7 @@ router.post('/songs/:id/purchase', requireAuth, async (req, res) => {
       return res.json({ url: pd.url, purchaseId: purchase._id, provider: 'paydunya' });
     }
 
-    res.status(400).json({ message: 'Provider non supporté' });
+    res.status(400).json({ message: 'Provider non supportÃ©' });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
@@ -308,9 +308,9 @@ router.get('/admin/purchases', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // 3. DONS & POURBOIRES (TIPPING)
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 router.post('/artists/:id/tip', requireAuth, async (req, res) => {
   try {
@@ -318,7 +318,7 @@ router.post('/artists/:id/tip', requireAuth, async (req, res) => {
       amount, currency = 'EUR', message = '',
       provider = 'stripe', anonymous = false, phoneNumber,
     } = req.body;
-    if (!amount || amount < 0.5) return res.status(400).json({ message: 'Montant minimum 0,50 €' });
+    if (!amount || amount < 0.5) return res.status(400).json({ message: 'Montant minimum 0,50 â‚¬' });
 
     const artist = await Artist.findById(req.params.id);
     if (!artist) return res.status(404).json({ message: 'Artiste introuvable' });
@@ -366,12 +366,12 @@ router.post('/artists/:id/tip', requireAuth, async (req, res) => {
         tipId: tip._id, provider,
         message: `Paiement Mobile Money en attente de confirmation (${phoneNumber})`,
         instructions: provider === 'orange_money'
-          ? `Composez *144*4*1*${amount}*${artist.nom}# sur votre téléphone Orange`
+          ? `Composez *144*4*1*${amount}*${artist.nom}# sur votre tÃ©lÃ©phone Orange`
           : `Confirmez le paiement de ${amount} ${currency} sur votre app Airtel Money`,
       });
     }
 
-    res.status(400).json({ message: 'Provider non supporté' });
+    res.status(400).json({ message: 'Provider non supportÃ©' });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
@@ -391,7 +391,7 @@ router.put('/tips/:id/confirm', requireAdmin, async (req, res) => {
 router.get('/artists/:id/tips', requireAdminOrArtist, async (req, res) => {
   try {
     if (req.user.role === 'artist' && String(req.user.id) !== String(req.params.id))
-      return res.status(403).json({ message: 'Accès refusé' });
+      return res.status(403).json({ message: 'AccÃ¨s refusÃ©' });
 
     const tips  = await Tip.find({ toArtistId: req.params.id, status: 'completed' })
       .populate('fromUserId', 'nom avatar')
@@ -406,15 +406,15 @@ router.get('/artists/:id/tips', requireAdminOrArtist, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // 4. ROYALTIES ARTISTES
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// GET — dashboard royalties artiste
+// GET â€” dashboard royalties artiste
 router.get('/artists/:id/royalties', requireAdminOrArtist, async (req, res) => {
   try {
     if (req.user.role === 'artist' && String(req.user.id) !== String(req.params.id))
-      return res.status(403).json({ message: 'Accès refusé' });
+      return res.status(403).json({ message: 'AccÃ¨s refusÃ©' });
 
     const royalties = await Royalty.find({ artisteId: req.params.id })
       .sort({ period: -1 })
@@ -427,11 +427,11 @@ router.get('/artists/:id/royalties', requireAdminOrArtist, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// Artiste — configurer son compte de paiement
+// Artiste â€” configurer son compte de paiement
 router.put('/artists/:id/payout', requireAdminOrArtist, async (req, res) => {
   try {
     if (req.user.role === 'artist' && String(req.user.id) !== String(req.params.id))
-      return res.status(403).json({ message: 'Accès refusé' });
+      return res.status(403).json({ message: 'AccÃ¨s refusÃ©' });
 
     const { paypalEmail, mobileMoneyPhone, mobileMoneyProvider } = req.body;
     const payout = await ArtistPayout.findOneAndUpdate(
@@ -448,11 +448,11 @@ router.put('/artists/:id/payout', requireAdminOrArtist, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// Artiste — onboarding Stripe Connect
+// Artiste â€” onboarding Stripe Connect
 router.post('/artists/:id/stripe-connect', requireAdminOrArtist, async (req, res) => {
   try {
     if (req.user.role === 'artist' && String(req.user.id) !== String(req.params.id))
-      return res.status(403).json({ message: 'Accès refusé' });
+      return res.status(403).json({ message: 'AccÃ¨s refusÃ©' });
 
     const artist = await Artist.findById(req.params.id);
     let payout   = await ArtistPayout.findOne({ artisteId: req.params.id });
@@ -480,7 +480,7 @@ router.post('/artists/:id/stripe-connect', requireAdminOrArtist, async (req, res
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// Admin — déclencher le virement mensuel
+// Admin â€” dÃ©clencher le virement mensuel
 router.post('/admin/royalties/payout', requireAdmin, async (req, res) => {
   try {
     const { period = currentPeriod() } = req.body;
@@ -496,7 +496,7 @@ router.post('/admin/royalties/payout', requireAdmin, async (req, res) => {
             amount:      r.revenue,
             currency:    'eur',
             destination: payout.stripeAccountId,
-            description: `Royalties MOOZIK ${period} — ${r.artisteId.nom}`,
+            description: `Royalties MOOZIK ${period} â€” ${r.artisteId.nom}`,
           });
           await Royalty.findByIdAndUpdate(r._id, {
             status: 'paid', paidAt: new Date(), stripeTransferId: transfer.id,
@@ -506,20 +506,20 @@ router.post('/admin/royalties/payout', requireAdmin, async (req, res) => {
           });
           paid++;
         } catch (err) {
-          console.warn(`Virement échoué pour ${r.artisteId.nom}:`, err.message);
+          console.warn(`Virement Ã©chouÃ© pour ${r.artisteId.nom}:`, err.message);
         }
       } else {
         await Royalty.findByIdAndUpdate(r._id, { status: 'processing' });
       }
     }
-    res.json({ message: `Virements traités: ${paid}/${pending.length}`, period });
+    res.json({ message: `Virements traitÃ©s: ${paid}/${pending.length}`, period });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// ────────────────────────────────────────────
-// FIX #1 — Admin : aperçu global royalties
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// FIX #1 â€” Admin : aperÃ§u global royalties
 // Correction : try/catch explicite + log d'erreur
-// ────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.get('/admin/royalties', requireAdmin, async (req, res) => {
   try {
     const period = req.query.period || currentPeriod();
@@ -530,7 +530,7 @@ router.get('/admin/royalties', requireAdmin, async (req, res) => {
       {
         $lookup: {
           from:         'artists',
-          localField:   'artistId',
+          localField:   'artisteId',
           foreignField: '_id',
           as:           'artisteId',
         },
@@ -558,9 +558,9 @@ router.get('/admin/royalties', requireAdmin, async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════════
-// 5. PUBLICITÉ AUDIO (AUDIO ADS)
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// 5. PUBLICITÃ‰ AUDIO (AUDIO ADS)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 router.get('/ads/next', optionalAuth, async (req, res) => {
   try {
@@ -644,9 +644,9 @@ router.put('/admin/ads/:id', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// ════════════════════════════════════════════
-// 6. BILLETTERIE ÉVÉNEMENTS
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// 6. BILLETTERIE Ã‰VÃ‰NEMENTS
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 router.post('/events', requireAdminOrArtist, upload.single('image'), async (req, res) => {
   try {
@@ -716,7 +716,7 @@ router.delete('/events/:id', requireAdminOrArtist, async (req, res) => {
   try {
     const event = await Event.findByIdAndDelete(req.params.id);
     if (!event) return res.status(404).json({ message: 'Event introuvable' });
-    res.json({ message: 'Event supprimé avec succès' });
+    res.json({ message: 'Event supprimÃ© avec succÃ¨s' });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
@@ -724,14 +724,14 @@ router.post('/events/:id/tickets', requireAuth, async (req, res) => {
   try {
     const event = await Event.findById(req.params.id);
     if (!event) return res.status(404).json({ message: 'Introuvable' });
-    if (!event.ticketOnSale) return res.status(400).json({ message: 'Billetterie fermée' });
+    if (!event.ticketOnSale) return res.status(400).json({ message: 'Billetterie fermÃ©e' });
     if (event.ticketCapacity > 0 && event.ticketsSold >= event.ticketCapacity)
       return res.status(400).json({ message: 'Complet' });
 
     const existing = await Ticket.findOne({
       eventId: req.params.id, userId: req.user.id, status: 'confirmed',
     });
-    if (existing) return res.status(400).json({ message: 'Billet déjà acheté', ticket: existing });
+    if (existing) return res.status(400).json({ message: 'Billet dÃ©jÃ  achetÃ©', ticket: existing });
 
     const { quantity = 1, provider = 'stripe' } = req.body;
     const total  = event.ticketPrice * parseInt(quantity);
@@ -756,7 +756,7 @@ router.post('/events/:id/tickets', requireAuth, async (req, res) => {
           price_data: {
             currency:     event.ticketCurrency.toLowerCase(),
             product_data: {
-              name:   `🎫 ${event.title} — ${event.venue}`,
+              name:   `ðŸŽ« ${event.title} â€” ${event.venue}`,
               images: [event.image].filter(Boolean),
             },
             unit_amount: event.ticketPrice,
@@ -784,7 +784,7 @@ router.post('/events/:id/tickets', requireAuth, async (req, res) => {
       return res.json({ url: pd.url, ticketId: ticket._id, provider: 'paydunya' });
     }
 
-    res.status(400).json({ message: 'Provider non supporté' });
+    res.status(400).json({ message: 'Provider non supportÃ©' });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
@@ -804,28 +804,28 @@ router.get('/tickets/scan/:qrCode', requireAdminOrArtist, async (req, res) => {
       .populate('userId', 'nom email');
     if (!ticket) return res.status(404).json({ valid: false, message: 'Billet invalide' });
     if (ticket.status !== 'confirmed')
-      return res.json({ valid: false, message: 'Billet non confirmé' });
+      return res.json({ valid: false, message: 'Billet non confirmÃ©' });
     if (ticket.used)
-      return res.json({ valid: false, message: 'Billet déjà utilisé', usedAt: ticket.usedAt });
+      return res.json({ valid: false, message: 'Billet dÃ©jÃ  utilisÃ©', usedAt: ticket.usedAt });
     await Ticket.findByIdAndUpdate(ticket._id, { used: true, usedAt: new Date() });
-    res.json({ valid: true, ticket, message: '✅ Entrée valide' });
+    res.json({ valid: true, ticket, message: 'âœ… EntrÃ©e valide' });
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// ────────────────────────────────────────────
-// FIX #2 — Admin : ventes billets par événement
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// FIX #2 â€” Admin : ventes billets par Ã©vÃ©nement
 // Corrections :
-//   - .lean() sur Event.find() → plus de .toObject() nécessaire
+//   - .lean() sur Event.find() â†’ plus de .toObject() nÃ©cessaire
 //   - try/catch individuel par event dans Promise.all
 //   - $match utilise ev._id directement (lean retourne un plain object)
-// ────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.get('/admin/events', requireAdmin, async (req, res) => {
   try {
     const events = await Event.find()
       .populate('artisteId', 'nom')
       .sort({ date: -1 })
       .limit(50)
-      .lean(); // ← FIX : plain objects, pas besoin de .toObject()
+      .lean(); // â† FIX : plain objects, pas besoin de .toObject()
 
     const result = await Promise.all(events.map(async (ev) => {
       try {
@@ -840,7 +840,7 @@ router.get('/admin/events', requireAdmin, async (req, res) => {
           revenueEuros:    toEuros(revenue[0]?.total || 0),
         };
       } catch (innerErr) {
-        // Un event cassé ne fait pas planter toute la liste
+        // Un event cassÃ© ne fait pas planter toute la liste
         console.warn(`Aggregate error for event ${ev._id}:`, innerErr.message);
         return {
           ...ev,
@@ -858,9 +858,9 @@ router.get('/admin/events', requireAdmin, async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // STRIPE WEBHOOK
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 router.post('/webhooks/stripe',
   express.raw({ type: 'application/json' }),
   async (req, res) => {
@@ -964,9 +964,9 @@ router.post('/webhooks/stripe',
   }
 );
 
-// ════════════════════════════════════════════
-// CONFIG MONÉTISATION (admin)
-// ════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// CONFIG MONÃ‰TISATION (admin)
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 router.get('/admin/monetisation/config', requireAdmin, async (_req, res) => {
   try {
     const configs = await MonetisationConfig.find();
@@ -986,7 +986,7 @@ router.put('/admin/monetisation/config', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// ── Helpers internes ──────────────────────────
+// â”€â”€ Helpers internes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function addToRoyalty(artistId, songId, source, amount, period) {
   if (!artistId || !amount) return;
   const inc = { revenue: amount, [`sources.${source}`]: amount };
