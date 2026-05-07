@@ -71,10 +71,33 @@ exports.getAdminRoyalties = async (req, res) => {
   try {
     const period = req.query.period || new Date().toISOString().slice(0, 7);
 
-    const royalties = await Royalty.find({ period })
-      .populate('artisteId', 'nom image')  // ✅ artisteId (nom du champ dans le schéma)
-      .sort({ revenue: -1 })
-      .lean();
+    // Les documents en base utilisent le champ `artistId` (pas `artisteId`)
+    // On fait le populate manuellement via aggregation pour éviter l'incohérence
+    const royalties = await Royalty.aggregate([
+      { $match: { period } },
+      { $sort: { revenue: -1 } },
+      {
+        $lookup: {
+          from:         'artists',       // nom de la collection MongoDB (pluriel lowercase)
+          localField:   'artistId',      // champ réel dans les documents Royalty
+          foreignField: '_id',
+          as:           'artisteId',     // on expose sous artisteId pour que le front marche
+        },
+      },
+      {
+        $addFields: {
+          artisteId: { $arrayElemAt: ['$artisteId', 0] }, // déplie le tableau
+        },
+      },
+      {
+        $project: {
+          period: 1, plays: 1, revenue: 1, status: 1, sources: 1, currency: 1,
+          'artisteId._id': 1,
+          'artisteId.nom': 1,
+          'artisteId.image': 1,
+        },
+      },
+    ]);
 
     const totalCents = royalties.reduce((s, r) => s + (r.revenue || 0), 0);
 
