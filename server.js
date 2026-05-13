@@ -1,4 +1,41 @@
 require('dotenv').config();
+// TEST SMTP — à supprimer après confirmation
+console.log('SMTP config:', {
+  host:   process.env.SMTP_HOST,
+  port:   process.env.SMTP_PORT,
+  user:   process.env.SMTP_USER,
+  pass:   process.env.SMTP_PASS ? '✅ défini' : '❌ MANQUANT',
+  from:   process.env.SMTP_FROM,
+  frontend: process.env.FRONTEND_URL,
+});
+
+// Dans server.js, juste après le console.log SMTP
+const nodemailer = require('nodemailer');
+const testTransporter = nodemailer.createTransport({
+  host:   process.env.SMTP_HOST,
+  port:   587,
+  secure: false,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+});
+
+testTransporter.verify((err, success) => {
+  if (err) console.error('❌ SMTP ERROR:', JSON.stringify(err, null, 2));
+  else {
+    console.log('✅ SMTP connecté — envoi test...');
+    testTransporter.sendMail({
+      from:    process.env.SMTP_USER,
+      to:      process.env.SMTP_USER,  // s'envoie à soi-même
+      subject: 'Test Moozik SMTP',
+      text:    'Si tu reçois ça, le SMTP fonctionne.',
+    }, (err, info) => {
+      if (err) console.error('❌ Envoi échoué:', JSON.stringify(err, null, 2));
+      else     console.log('✅ Email envoyé:', info.messageId);
+    });
+  }
+});
 
 const express    = require('express');
 const mongoose   = require('mongoose');
