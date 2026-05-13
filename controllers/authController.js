@@ -6,14 +6,18 @@ const { signToken } = require('../middleware/auth');
 const { toCloud, AVT_TRANSFORM, IMG_TRANSFORM, fromCloud } = require('../middleware/upload');
 
 // ─── Transporteur email ───────────────────────────────────────────────────────
-// Variables .env requises :
-//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, FRONTEND_URL
-const transporter = nodemailer.createTransport({
-  host:   process.env.SMTP_HOST,
-  port:   Number(process.env.SMTP_PORT) || 587,
-  secure: Number(process.env.SMTP_PORT) === 465,
-  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-});
+// FIX : créé dans une fonction pour s'assurer que les vars .env sont bien chargées
+function createTransporter() {
+  return nodemailer.createTransport({
+    host:   process.env.SMTP_HOST,
+    port:   Number(process.env.SMTP_PORT) || 587,
+    secure: Number(process.env.SMTP_PORT) === 465,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+}
 
 // ══════════════════════════════════════════════
 // ADMIN AUTH
@@ -124,8 +128,14 @@ exports.userRegister = async (req, res) => {
   try {
     const { email, password, nom } = req.body;
     if (!email || !password) return res.status(400).json({ message: 'Email et mot de passe requis' });
-    if (await User.findOne({ email })) return res.status(400).json({ message: 'Email déjà utilisé' });
-    const user = await new User({ email, password: await bcrypt.hash(password, 12), nom: nom || email.split('@')[0] }).save();
+    // FIX : normaliser l'email à l'inscription pour cohérence avec forgotPassword
+    const normalizedEmail = email.toLowerCase().trim();
+    if (await User.findOne({ email: normalizedEmail })) return res.status(400).json({ message: 'Email déjà utilisé' });
+    const user = await new User({
+      email: normalizedEmail,
+      password: await bcrypt.hash(password, 12),
+      nom: nom || normalizedEmail.split('@')[0],
+    }).save();
     const token = signToken({ id: user._id, email: user.email, nom: user.nom, role: 'user' });
     res.json({ token, email: user.email, nom: user.nom, role: 'user', userId: user._id });
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -134,7 +144,8 @@ exports.userRegister = async (req, res) => {
 exports.userLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await User.findOne({ email }).select('+password');
+    // FIX : normaliser l'email à la connexion aussi
+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
     if (!user || !await bcrypt.compare(password, user.password))
       return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
     if (user.banned)
@@ -158,7 +169,7 @@ exports.updateUser = async (req, res) => {
       return res.status(403).json({ message: 'Accès refusé' });
     const update = {};
     if (req.body.nom)   update.nom   = req.body.nom;
-    if (req.body.email) update.email = req.body.email;
+    if (req.body.email) update.email = req.body.email.toLowerCase().trim();
     if (req.file) {
       const old = await User.findById(req.params.id);
       if (old?.avatarPublicId) await fromCloud(old.avatarPublicId);
@@ -227,7 +238,8 @@ exports.forgotPassword = async (req, res) => {
   try {
     if (!email) return res.status(400).json({ message: 'Email requis.' });
 
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    const normalizedEmail = email.toLowerCase().trim();
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) return res.status(200).json({ message: GENERIC });
 
     // 1. Token brut aléatoire (envoyé dans l'email)
@@ -241,8 +253,11 @@ exports.forgotPassword = async (req, res) => {
 
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${rawToken}`;
 
+    // FIX : transporter créé à la demande pour éviter les problèmes de chargement des vars .env
+    const transporter = createTransporter();
+
     await transporter.sendMail({
-      from:    `"Moozik" <${process.env.SMTP_FROM}>`,
+      from:    process.env.SMTP_FROM,
       to:      user.email,
       subject: 'Réinitialisation de votre mot de passe Moozik',
       html: `
@@ -292,15 +307,15 @@ exports.resetPassword = async (req, res) => {
 
     const user = await User.findOne({
       resetPasswordToken:   hashedToken,
-      resetPasswordExpires: { $gt: new Date() },  // non expiré
+      resetPasswordExpires: { $gt: new Date() }, // non expiré
     }).select('+resetPasswordToken +resetPasswordExpires +password');
 
     if (!user)
       return res.status(400).json({ message: 'Lien invalide ou expiré. Veuillez refaire une demande.' });
 
-    // Le pre-save hook bcrypt se charge du hash
-    user.password             = newPassword;
-    user.resetPasswordToken   = undefined;  // token à usage unique → supprimé
+    // FIX : hash explicite — ne pas supposer qu'un pre-save hook existe
+    user.password             = await bcrypt.hash(newPassword, 12);
+    user.resetPasswordToken   = undefined; // token à usage unique → supprimé
     user.resetPasswordExpires = undefined;
     await user.save();
 
