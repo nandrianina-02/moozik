@@ -232,63 +232,50 @@ exports.publicFavorites = async (req, res) => {
 // POST /users/forgot-password  { email }
 exports.forgotPassword = async (req, res) => {
   const { email } = req.body;
-  // Message générique : ne jamais révéler si l'email existe en BDD (sécurité anti-énumération)
   const GENERIC = 'Si cet email est associé à un compte, un lien de réinitialisation a été envoyé.';
+  
+  console.log('[forgotPassword] requête reçue:', email);
 
   try {
     if (!email) return res.status(400).json({ message: 'Email requis.' });
-
     const normalizedEmail = email.toLowerCase().trim();
+
     const user = await User.findOne({ email: normalizedEmail });
+    console.log('[forgotPassword] user trouvé:', user ? user.email : 'AUCUN');
+
     if (!user) return res.status(200).json({ message: GENERIC });
 
-    // 1. Token brut aléatoire (envoyé dans l'email)
     const rawToken    = crypto.randomBytes(32).toString('hex');
-    // 2. Hash stocké en BDD (on ne stocke jamais le token brut)
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
-
     user.resetPasswordToken   = hashedToken;
-    user.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 min
+    user.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000);
     await user.save({ validateBeforeSave: false });
+    console.log('[forgotPassword] token sauvegardé en BDD');
 
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${rawToken}`;
+    console.log('[forgotPassword] resetUrl:', resetUrl);
 
-    // FIX : transporter créé à la demande pour éviter les problèmes de chargement des vars .env
     const transporter = createTransporter();
+    console.log('[forgotPassword] envoi email vers:', user.email);
 
     await transporter.sendMail({
       from:    process.env.SMTP_FROM,
       to:      user.email,
       subject: 'Réinitialisation de votre mot de passe Moozik',
-      html: `
-        <div style="font-family:sans-serif;max-width:480px;margin:auto;background:#18181b;color:#fff;padding:32px;border-radius:16px;">
-          <h2 style="color:#dc2626;margin-bottom:8px;">Moozik</h2>
-          <p>Bonjour <strong>${user.nom || user.email}</strong>,</p>
-          <p>Vous avez demandé la réinitialisation de votre mot de passe.<br/>
-             Ce lien est valable <strong>15 minutes</strong>.</p>
-          <a href="${resetUrl}"
-             style="display:inline-block;margin:24px 0;padding:14px 28px;background:#dc2626;color:#fff;border-radius:10px;text-decoration:none;font-weight:bold;">
-            Réinitialiser mon mot de passe
-          </a>
-          <p style="color:#71717a;font-size:12px;">
-            Si vous n'avez pas fait cette demande, ignorez cet email.<br/>
-            Lien direct : ${resetUrl}
-          </p>
-        </div>
-      `,
+      html: `...`,
     });
 
+    console.log('[forgotPassword] email envoyé avec succès');
     return res.status(200).json({ message: GENERIC });
 
   } catch (e) {
-    console.error('[forgotPassword]', e);
-    // Nettoyer le token orphelin si l'envoi email a échoué
+    console.error('[forgotPassword] ERREUR:', e);
     try {
       await User.findOneAndUpdate(
         { email: email?.toLowerCase().trim() },
         { $unset: { resetPasswordToken: '', resetPasswordExpires: '' } }
       );
-    } catch (_) { /* silencieux */ }
+    } catch (_) {}
     return res.status(500).json({ message: 'Erreur serveur. Veuillez réessayer.' });
   }
 };
