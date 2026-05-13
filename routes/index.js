@@ -85,13 +85,14 @@ router.put('/admin/users/:id/ban',   auth.requireAdmin, admin.banUser);  // ← 
 router.post('/users/register',       ac.userRegister);
 router.post('/users/login',          ac.userLogin);
 router.get('/users/verify',          auth.requireAuth, ac.userVerify);
+router.post('/users/forgot-password', ac.forgotPassword);
+router.post('/users/reset-password',  ac.resetPassword);
 router.put('/users/:id',             auth.requireAuth, upload.single('avatar'), ac.updateUser);
 router.put('/users/:id/password',    auth.requireAuth, ac.changeUserPassword);
 router.get('/users/:id/profile',     ac.publicProfile);
 router.get('/users/:id/playlists',   ac.publicPlaylists);
 router.get('/users/:id/favorites',   ac.publicFavorites);
-router.post('/users/forgot-password', ac.forgotPassword);
-router.post('/users/reset-password',  ac.resetPassword);
+
 
 // ══════════════════════════════════════════════
 // ARTIST AUTH
