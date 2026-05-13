@@ -125,6 +125,11 @@ exports.userLogin = async (req, res) => {
     const user = await User.findOne({ email });
     if (!user || !await bcrypt.compare(password, user.password))
       return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
+    
+    // ← Ajouter ce check
+    if (user.banned)
+      return res.status(403).json({ message: 'Compte suspendu. Contactez le support.' });
+
     const token = signToken({ id: user._id, email: user.email, nom: user.nom, role: 'user' });
     res.json({ token, email: user.email, nom: user.nom, role: 'user', userId: user._id, avatar: user.avatar || '' });
   } catch (e) { res.status(500).json({ message: e.message }); }

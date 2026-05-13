@@ -460,3 +460,12 @@ exports.broadcastNewsletter = async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
+exports.banUser = async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'Utilisateur introuvable' });
+    user.banned = !user.banned;
+    await user.save();
+    res.json({ banned: user.banned, message: user.banned ? 'Utilisateur banni' : 'Ban levé' });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};

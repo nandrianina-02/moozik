@@ -77,6 +77,7 @@ router.get('/admin/users',          auth.requireAdmin, admin.listUsers);
 router.get('/admin/users/:id/stats',auth.requireAdmin, admin.getUserStats);
 router.put('/admin/users/:id',      auth.requireAdmin, admin.updateUserAdmin);
 router.delete('/admin/users/:id',   auth.requireAdmin, admin.deleteUser);
+router.put('/admin/users/:id/ban',   auth.requireAdmin, admin.banUser);  // ← ajouter
 
 // ══════════════════════════════════════════════
 // USER AUTH
