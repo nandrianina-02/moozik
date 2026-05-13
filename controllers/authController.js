@@ -233,47 +233,64 @@ exports.publicFavorites = async (req, res) => {
 exports.forgotPassword = async (req, res) => {
   const { email } = req.body;
   const GENERIC = 'Si cet email est associé à un compte, un lien de réinitialisation a été envoyé.';
-  
-  console.log('[forgotPassword] requête reçue:', email);
 
   try {
     if (!email) return res.status(400).json({ message: 'Email requis.' });
+
     const normalizedEmail = email.toLowerCase().trim();
-
     const user = await User.findOne({ email: normalizedEmail });
-    console.log('[forgotPassword] user trouvé:', user ? user.email : 'AUCUN');
-
     if (!user) return res.status(200).json({ message: GENERIC });
 
     const rawToken    = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
-    user.resetPasswordToken   = hashedToken;
-    user.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000);
-    await user.save({ validateBeforeSave: false });
-    console.log('[forgotPassword] token sauvegardé en BDD');
+
+    await User.findOneAndUpdate(
+      { email: normalizedEmail },
+      {
+        $set: {
+          resetPasswordToken:   hashedToken,
+          resetPasswordExpires: new Date(Date.now() + 15 * 60 * 1000),
+        }
+      },
+      { returnDocument: 'after', strict: false }
+    );
 
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${rawToken}`;
-    console.log('[forgotPassword] resetUrl:', resetUrl);
 
     const transporter = createTransporter();
-    console.log('[forgotPassword] envoi email vers:', user.email);
-
     await transporter.sendMail({
       from:    process.env.SMTP_FROM,
       to:      user.email,
       subject: 'Réinitialisation de votre mot de passe Moozik',
-      html: `...`,
+      html: `
+        <div style="font-family:sans-serif;padding:32px;max-width:480px;margin:auto;">
+          <h2 style="color:#dc2626;">Moozik</h2>
+          <p>Bonjour <strong>${user.nom || user.email}</strong>,</p>
+          <p>Vous avez demandé la réinitialisation de votre mot de passe.<br/>
+            Ce lien est valable <strong>15 minutes</strong>.</p>
+          <p>
+            <a href="${resetUrl}"
+              style="background:#dc2626;color:#fff;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:bold;display:inline-block;">
+              Réinitialiser mon mot de passe
+            </a>
+          </p>
+          <p style="color:#999;font-size:12px;">
+            Si vous n'avez pas fait cette demande, ignorez cet email.<br/>
+            Lien direct : <a href="${resetUrl}">${resetUrl}</a>
+          </p>
+        </div>
+      `,
     });
 
-    console.log('[forgotPassword] email envoyé avec succès');
     return res.status(200).json({ message: GENERIC });
 
   } catch (e) {
-    console.error('[forgotPassword] ERREUR:', e);
+    console.error('[forgotPassword]', e.message);
     try {
       await User.findOneAndUpdate(
         { email: email?.toLowerCase().trim() },
-        { $unset: { resetPasswordToken: '', resetPasswordExpires: '' } }
+        { $unset: { resetPasswordToken: '', resetPasswordExpires: '' } },
+        { strict: false }
       );
     } catch (_) {}
     return res.status(500).json({ message: 'Erreur serveur. Veuillez réessayer.' });
@@ -286,30 +303,32 @@ exports.resetPassword = async (req, res) => {
   try {
     if (!token || !newPassword)
       return res.status(400).json({ message: 'Token et nouveau mot de passe requis.' });
-    if (newPassword.length < 6)
-      return res.status(400).json({ message: 'Trop court (6 min).' });
+    if (newPassword.length < 8)
+      return res.status(400).json({ message: 'Trop court (8 min).' });
 
-    // Hasher le token reçu pour comparer avec le hash en BDD
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
 
     const user = await User.findOne({
       resetPasswordToken:   hashedToken,
-      resetPasswordExpires: { $gt: new Date() }, // non expiré
+      resetPasswordExpires: { $gt: new Date() },
     }).select('+resetPasswordToken +resetPasswordExpires +password');
 
     if (!user)
       return res.status(400).json({ message: 'Lien invalide ou expiré. Veuillez refaire une demande.' });
 
-    // FIX : hash explicite — ne pas supposer qu'un pre-save hook existe
-    user.password             = await bcrypt.hash(newPassword, 12);
-    user.resetPasswordToken   = undefined; // token à usage unique → supprimé
-    user.resetPasswordExpires = undefined;
-    await user.save();
+    await User.findOneAndUpdate(
+      { _id: user._id },
+      {
+        $set:   { password: await bcrypt.hash(newPassword, 12) },
+        $unset: { resetPasswordToken: '', resetPasswordExpires: '' },
+      },
+      { strict: false }
+    );
 
     return res.status(200).json({ message: 'Mot de passe mis à jour. Vous pouvez vous connecter.' });
 
   } catch (e) {
-    console.error('[resetPassword]', e);
+    console.error('[resetPassword]', e.message);
     return res.status(500).json({ message: 'Erreur serveur. Veuillez réessayer.' });
   }
 };
