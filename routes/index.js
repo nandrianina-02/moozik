@@ -70,6 +70,7 @@ router.get('/admin/unassigned-songs',       auth.requireAdmin, admin.getUnassign
 router.get('/admin/songs',                  auth.requireAdmin, admin.listAdminSongs);
 router.get('/admin/albums',                 auth.requireAdmin, admin.listAdminAlbums);
 router.get('/admin/shares',                 auth.requireAdmin, admin.getAdminShares);
+router.post('/admin/broadcast', auth.requireAdmin, admin.broadcastNewsletter);
 
 // Admin users
 router.get('/admin/users',          auth.requireAdmin, admin.listUsers);

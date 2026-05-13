@@ -424,3 +424,39 @@ exports.clearNotifications = async (req, res) => {
   catch (e) { res.status(500).json({ message: e.message }); }
 };
 
+// ══════════════════════════════════════════════
+// NEWSLETTER BROADCAST
+// ══════════════════════════════════════════════
+exports.broadcastNewsletter = async (req, res) => {
+  try {
+    const { subject, message } = req.body;
+    if (!subject?.trim() || !message?.trim())
+      return res.status(400).json({ message: 'Sujet et message requis' });
+
+    const nodemailer  = require('nodemailer');
+    const transporter = nodemailer.createTransport({
+      host:   process.env.SMTP_HOST,
+      port:   Number(process.env.SMTP_PORT) || 587,
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    });
+
+    const users  = await User.find({}, 'email').lean();
+    const emails = users.map(u => u.email).filter(Boolean);
+
+    await Promise.allSettled(
+      emails.map(email =>
+        transporter.sendMail({
+          from:    process.env.MAIL_FROM || process.env.SMTP_USER,
+          to:      email,
+          subject: subject.trim(),
+          text:    message.trim(),
+          html:    `<p>${message.trim().replace(/\n/g, '<br>')}</p>`,
+        })
+      )
+    );
+
+    res.json({ sent: emails.length });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};
+

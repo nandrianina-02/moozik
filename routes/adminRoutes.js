@@ -12,6 +12,8 @@ const {
   updateUserRole,
 } = require('../controllers/adminTeamController');
 
+const { broadcastNewsletter } = require('../controllers/adminController');
+
 // requirePrimary n'existe pas dans auth.js — la vérification isPrimary est dans le contrôleur
 const { requireAdmin } = require('../middleware/auth');
 
@@ -24,6 +26,7 @@ router.get   ('/team',            requireAdmin, getTeam);
 router.put   ('/team/:id',        requireAdmin, updateAdmin);
 router.delete('/team/:id',        requireAdmin, deleteAdmin);
 router.post  ('/team/:id/revoke', requireAdmin, revokeSession);
+router.post('/broadcast', requireAdmin, broadcastNewsletter);
 
 // ── USERS ─────────────────────────────────────────────────────────────────────
 router.get('/users',          requireAdmin, getUsers);
