@@ -90,6 +90,8 @@ router.put('/users/:id/password',    auth.requireAuth, ac.changeUserPassword);
 router.get('/users/:id/profile',     ac.publicProfile);
 router.get('/users/:id/playlists',   ac.publicPlaylists);
 router.get('/users/:id/favorites',   ac.publicFavorites);
+router.post('/users/forgot-password', ac.forgotPassword);
+router.post('/users/reset-password',  ac.resetPassword);
 
 // ══════════════════════════════════════════════
 // ARTIST AUTH

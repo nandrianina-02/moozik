@@ -1,7 +1,19 @@
-const bcrypt = require('bcryptjs');
+const crypto     = require('crypto');
+const bcrypt     = require('bcryptjs');
+const nodemailer = require('nodemailer');
 const { Admin, User, Artist } = require('../models');
 const { signToken } = require('../middleware/auth');
 const { toCloud, AVT_TRANSFORM, IMG_TRANSFORM, fromCloud } = require('../middleware/upload');
+
+// ─── Transporteur email ───────────────────────────────────────────────────────
+// Variables .env requises :
+//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM, FRONTEND_URL
+const transporter = nodemailer.createTransport({
+  host:   process.env.SMTP_HOST,
+  port:   Number(process.env.SMTP_PORT) || 587,
+  secure: Number(process.env.SMTP_PORT) === 465,
+  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+});
 
 // ══════════════════════════════════════════════
 // ADMIN AUTH
@@ -122,14 +134,11 @@ exports.userRegister = async (req, res) => {
 exports.userLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email }).select('+password');
     if (!user || !await bcrypt.compare(password, user.password))
       return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
-    
-    // ← Ajouter ce check
     if (user.banned)
       return res.status(403).json({ message: 'Compte suspendu. Contactez le support.' });
-
     const token = signToken({ id: user._id, email: user.email, nom: user.nom, role: 'user' });
     res.json({ token, email: user.email, nom: user.nom, role: 'user', userId: user._id, avatar: user.avatar || '' });
   } catch (e) { res.status(500).json({ message: e.message }); }
@@ -169,7 +178,7 @@ exports.changeUserPassword = async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) return res.status(400).json({ message: 'Champs requis' });
     if (newPassword.length < 6) return res.status(400).json({ message: 'Trop court (6 min)' });
-    const user = await User.findById(req.params.id);
+    const user = await User.findById(req.params.id).select('+password');
     if (!user || !await bcrypt.compare(currentPassword, user.password))
       return res.status(401).json({ message: 'Mot de passe actuel incorrect' });
     user.password = await bcrypt.hash(newPassword, 12);
@@ -203,6 +212,104 @@ exports.publicFavorites = async (req, res) => {
     const songs = await require('../models').Song.find({ _id: { $in: favs.map(f => f.songId) } }).select('-audioPublicId -imagePublicId -__v');
     res.json(songs.map(s => ({ ...s.toObject(), liked: true })));
   } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
+// ══════════════════════════════════════════════
+// USER — MOT DE PASSE OUBLIÉ
+// ══════════════════════════════════════════════
+
+// POST /users/forgot-password  { email }
+exports.forgotPassword = async (req, res) => {
+  const { email } = req.body;
+  // Message générique : ne jamais révéler si l'email existe en BDD (sécurité anti-énumération)
+  const GENERIC = 'Si cet email est associé à un compte, un lien de réinitialisation a été envoyé.';
+
+  try {
+    if (!email) return res.status(400).json({ message: 'Email requis.' });
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!user) return res.status(200).json({ message: GENERIC });
+
+    // 1. Token brut aléatoire (envoyé dans l'email)
+    const rawToken    = crypto.randomBytes(32).toString('hex');
+    // 2. Hash stocké en BDD (on ne stocke jamais le token brut)
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    user.resetPasswordToken   = hashedToken;
+    user.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 min
+    await user.save({ validateBeforeSave: false });
+
+    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${rawToken}`;
+
+    await transporter.sendMail({
+      from:    `"Moozik" <${process.env.SMTP_FROM}>`,
+      to:      user.email,
+      subject: 'Réinitialisation de votre mot de passe Moozik',
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:auto;background:#18181b;color:#fff;padding:32px;border-radius:16px;">
+          <h2 style="color:#dc2626;margin-bottom:8px;">Moozik</h2>
+          <p>Bonjour <strong>${user.nom || user.email}</strong>,</p>
+          <p>Vous avez demandé la réinitialisation de votre mot de passe.<br/>
+             Ce lien est valable <strong>15 minutes</strong>.</p>
+          <a href="${resetUrl}"
+             style="display:inline-block;margin:24px 0;padding:14px 28px;background:#dc2626;color:#fff;border-radius:10px;text-decoration:none;font-weight:bold;">
+            Réinitialiser mon mot de passe
+          </a>
+          <p style="color:#71717a;font-size:12px;">
+            Si vous n'avez pas fait cette demande, ignorez cet email.<br/>
+            Lien direct : ${resetUrl}
+          </p>
+        </div>
+      `,
+    });
+
+    return res.status(200).json({ message: GENERIC });
+
+  } catch (e) {
+    console.error('[forgotPassword]', e);
+    // Nettoyer le token orphelin si l'envoi email a échoué
+    try {
+      await User.findOneAndUpdate(
+        { email: email?.toLowerCase().trim() },
+        { $unset: { resetPasswordToken: '', resetPasswordExpires: '' } }
+      );
+    } catch (_) { /* silencieux */ }
+    return res.status(500).json({ message: 'Erreur serveur. Veuillez réessayer.' });
+  }
+};
+
+// POST /users/reset-password  { token, newPassword }
+exports.resetPassword = async (req, res) => {
+  const { token, newPassword } = req.body;
+  try {
+    if (!token || !newPassword)
+      return res.status(400).json({ message: 'Token et nouveau mot de passe requis.' });
+    if (newPassword.length < 6)
+      return res.status(400).json({ message: 'Trop court (6 min).' });
+
+    // Hasher le token reçu pour comparer avec le hash en BDD
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    const user = await User.findOne({
+      resetPasswordToken:   hashedToken,
+      resetPasswordExpires: { $gt: new Date() },  // non expiré
+    }).select('+resetPasswordToken +resetPasswordExpires +password');
+
+    if (!user)
+      return res.status(400).json({ message: 'Lien invalide ou expiré. Veuillez refaire une demande.' });
+
+    // Le pre-save hook bcrypt se charge du hash
+    user.password             = newPassword;
+    user.resetPasswordToken   = undefined;  // token à usage unique → supprimé
+    user.resetPasswordExpires = undefined;
+    await user.save();
+
+    return res.status(200).json({ message: 'Mot de passe mis à jour. Vous pouvez vous connecter.' });
+
+  } catch (e) {
+    console.error('[resetPassword]', e);
+    return res.status(500).json({ message: 'Erreur serveur. Veuillez réessayer.' });
+  }
 };
 
 // ══════════════════════════════════════════════
@@ -313,4 +420,3 @@ exports.changeArtistPassword = async (req, res) => {
     res.json({ message: 'Mot de passe mis à jour' });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
-
