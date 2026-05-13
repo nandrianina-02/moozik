@@ -45,9 +45,13 @@ app.use(compression({ level: 6, threshold: 1024 }));
 app.use(express.json());
 
 // ── MongoDB ───────────────────────────────────
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => { console.log('✅ MongoDB connecté'); createIndexes(); startRoyaltiesCron();})
-  .catch(err => console.error('❌ MongoDB :', err));
+mongoose.connect(process.env.MONGO_URI).then(async () => {
+  const { User } = require('./models');
+  await User.updateMany({ banned: { $exists: false } }, { $set: { banned: false } });
+  console.log('✅ MongoDB connecté');
+  createIndexes();
+  startRoyaltiesCron();
+});
 
 // ── Routes ────────────────────────────────────
 app.post('/webhooks/stripe',
