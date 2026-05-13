@@ -86,7 +86,7 @@ server.listen(PORT, '0.0.0.0', () => console.log(`🚀 Serveur sur le port ${POR
 const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
 
-const wss       = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, path: '/ws/listeners' });
 const listeners = new Map();
 
 setInterval(() => {
