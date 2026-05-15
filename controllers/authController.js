@@ -10,15 +10,13 @@ const { toCloud, AVT_TRANSFORM, IMG_TRANSFORM, fromCloud } = require('../middlew
 function createTransporter() {
   return nodemailer.createTransport({
     host:   process.env.SMTP_HOST,
-    port:   Number(process.env.SMTP_PORT) || 587,
-    secure: Number(process.env.SMTP_PORT) === 465,
+    port:   465,
+    secure: true,   // ← obligatoire pour le port 465
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
-    connectionTimeout: 5000,  // ← 5s max pour se connecter
-    greetingTimeout:   3000,  // ← 3s max pour le handshake
-    socketTimeout:     5000,  // ← 5s max par opération
+    family: 4,
   });
 }
 
