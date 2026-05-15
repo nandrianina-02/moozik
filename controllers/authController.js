@@ -225,6 +225,35 @@ exports.userVerify = async (req, res) => {
   } catch { res.json({ valid: true, ...req.user }); }
 };
 
+// DELETE /users/:id
+exports.deleteUser = async (req, res) => {
+  try {
+    if (String(req.user.id) !== String(req.params.id) && req.user.role !== 'admin')
+      return res.status(403).json({ message: 'Accès refusé' });
+
+    const { UserFavorite, UserPlay, History, Notification, UserPlaylist, ShareHistory } = require('../models');
+
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'Utilisateur introuvable' });
+
+    // Supprimer l'avatar Cloudinary
+    if (user.avatarPublicId) await fromCloud(user.avatarPublicId).catch(() => {});
+
+    // Supprimer toutes les données liées
+    await Promise.all([
+      UserFavorite.deleteMany({ userId: req.params.id }),
+      UserPlay.deleteMany({ userId: req.params.id }),
+      History.deleteMany({ userId: req.params.id }),
+      Notification.deleteMany({ userId: req.params.id }),
+      UserPlaylist.deleteMany({ userId: req.params.id }),
+      ShareHistory.deleteMany({ sharedBy: req.params.id }),
+    ]);
+
+    await User.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Compte supprimé' });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
 exports.updateUser = async (req, res) => {
   try {
     if (String(req.user.id) !== String(req.params.id) && req.user.role !== 'admin')

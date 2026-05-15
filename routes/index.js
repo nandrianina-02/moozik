@@ -88,6 +88,7 @@ router.get('/users/verify',          auth.requireAuth, ac.userVerify);
 router.post('/users/forgot-password', ac.forgotPassword);
 router.post('/users/reset-password',  ac.resetPassword);
 router.get('/users/verify-email', ac.verifyEmail);
+router.delete('/users/:id', auth.requireAuth, ac.deleteUser);
 router.put('/users/:id',             auth.requireAuth, upload.single('avatar'), ac.updateUser);
 router.put('/users/:id/password',    auth.requireAuth, ac.changeUserPassword);
 router.get('/users/:id/profile',     ac.publicProfile);
