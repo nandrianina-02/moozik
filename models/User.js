@@ -32,6 +32,18 @@ const userSchema = new mongoose.Schema({
     type:    Boolean,
     default: false,
   },
+  isVerified: {
+    type:    Boolean,
+    default: false,
+  },
+  verifyEmailToken: {
+    type:   String,
+    select: false,
+  },
+  verifyEmailExpires: {
+    type:   Date,
+    select: false,
+  },
 
   // ── Champs reset mot de passe ──────────────────────────────────────────────
   resetPasswordToken: {

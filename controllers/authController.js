@@ -125,32 +125,93 @@ exports.deleteAdmin = async (req, res) => {
 // ══════════════════════════════════════════════
 // USER AUTH
 // ══════════════════════════════════════════════
+// POST /users/register
 exports.userRegister = async (req, res) => {
   try {
     const { email, password, nom } = req.body;
     if (!email || !password) return res.status(400).json({ message: 'Email et mot de passe requis' });
-    // FIX : normaliser l'email à l'inscription pour cohérence avec forgotPassword
     const normalizedEmail = email.toLowerCase().trim();
-    if (await User.findOne({ email: normalizedEmail })) return res.status(400).json({ message: 'Email déjà utilisé' });
+    if (await User.findOne({ email: normalizedEmail }))
+      return res.status(400).json({ message: 'Email déjà utilisé' });
+
+    // Génère token de vérification
+    const rawToken    = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+
     const user = await new User({
-      email: normalizedEmail,
-      password: await bcrypt.hash(password, 12),
-      nom: nom || normalizedEmail.split('@')[0],
+      email:             normalizedEmail,
+      password:          await bcrypt.hash(password, 12),
+      nom:               nom || normalizedEmail.split('@')[0],
+      isVerified:        false,                          // ← nouveau champ
+      verifyEmailToken:  hashedToken,
+      verifyEmailExpires: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h
     }).save();
-    const token = signToken({ id: user._id, email: user.email, nom: user.nom, role: 'user' });
-    res.json({ token, email: user.email, nom: user.nom, role: 'user', userId: user._id });
+
+    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${rawToken}`;
+    const transporter = createTransporter();
+    await transporter.sendMail({
+      from:    process.env.SMTP_FROM,
+      to:      user.email,
+      subject: 'Confirmez votre adresse email — Moozik',
+      html: `
+        <div style="font-family:sans-serif;padding:32px;max-width:480px;margin:auto;">
+          <h2 style="color:#dc2626;">Moozik</h2>
+          <p>Bonjour <strong>${user.nom}</strong>,</p>
+          <p>Merci de créer un compte ! Cliquez ci-dessous pour confirmer votre email.<br/>
+            Ce lien est valable <strong>24 heures</strong>.</p>
+          <p>
+            <a href="${verifyUrl}"
+              style="background:#dc2626;color:#fff;padding:14px 28px;border-radius:10px;
+                     text-decoration:none;font-weight:bold;display:inline-block;">
+              Confirmer mon email
+            </a>
+          </p>
+          <p style="color:#999;font-size:12px;">
+            Si vous n'avez pas créé de compte, ignorez cet email.
+          </p>
+        </div>
+      `,
+    });
+
+    res.json({ message: 'Compte créé ! Vérifiez votre email pour activer votre compte.' });
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};
+
+// GET /users/verify-email?token=xxx
+exports.verifyEmail = async (req, res) => {
+  try {
+    const { token } = req.query;
+    if (!token) return res.status(400).json({ message: 'Token manquant' });
+
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+    const user = await User.findOne({
+      verifyEmailToken:   hashedToken,
+      verifyEmailExpires: { $gt: new Date() },
+    });
+
+    if (!user) return res.status(400).json({ message: 'Lien invalide ou expiré.' });
+
+    await User.findByIdAndUpdate(user._id, {
+      $set:   { isVerified: true },
+      $unset: { verifyEmailToken: '', verifyEmailExpires: '' },
+    }, { strict: false });
+
+    res.json({ message: 'Email confirmé ! Vous pouvez vous connecter.' });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
 exports.userLogin = async (req, res) => {
   try {
-    const { email, password } = req.body;
-    // FIX : normaliser l'email à la connexion aussi
     const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
     if (!user || !await bcrypt.compare(password, user.password))
       return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
     if (user.banned)
-      return res.status(403).json({ message: 'Compte suspendu. Contactez le support.' });
+      return res.status(403).json({ message: 'Compte suspendu.' });
+
+    // ← Vérification email
+    if (!user.isVerified)
+      return res.status(403).json({ message: 'Veuillez confirmer votre email avant de vous connecter.' });
+
     const token = signToken({ id: user._id, email: user.email, nom: user.nom, role: 'user' });
     res.json({ token, email: user.email, nom: user.nom, role: 'user', userId: user._id, avatar: user.avatar || '' });
   } catch (e) { res.status(500).json({ message: e.message }); }
