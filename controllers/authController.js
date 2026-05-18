@@ -129,60 +129,70 @@ exports.deleteAdmin = async (req, res) => {
 exports.userRegister = async (req, res) => {
   try {
     const { email, password, nom } = req.body;
-    if (!email || !password) return res.status(400).json({ message: 'Email et mot de passe requis' });
+    if (!email || !password) 
+      return res.status(400).json({ message: 'Email et mot de passe requis' });
+    
     const normalizedEmail = email.toLowerCase().trim();
     if (await User.findOne({ email: normalizedEmail }))
       return res.status(400).json({ message: 'Email déjà utilisé' });
 
-    // Génère token de vérification
     const rawToken    = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const verifyUrl   = `${process.env.FRONTEND_URL}/verify-email?token=${rawToken}`;
 
+    // 1. TEST SMTP AVANT de créer l'utilisateur
+    const transporter = createTransporter();
+    await transporter.verify(); // ← plante ici si SMTP KO, pas après la création
+
+    // 2. Crée l'utilisateur
     const user = await new User({
-      email:             normalizedEmail,
-      password:          await bcrypt.hash(password, 12),
-      nom:               nom || normalizedEmail.split('@')[0],
-      isVerified:        false,                          // ← nouveau champ
-      verifyEmailToken:  hashedToken,
-      verifyEmailExpires: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h
+      email:              normalizedEmail,
+      password:           await bcrypt.hash(password, 12),
+      nom:                nom || normalizedEmail.split('@')[0],
+      isVerified:         false,
+      verifyEmailToken:   hashedToken,
+      verifyEmailExpires: new Date(Date.now() + 24 * 60 * 60 * 1000),
     }).save();
 
-    const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${rawToken}`;
-    const transporter = createTransporter();
-    console.log('[SMTP DEBUG]', {
-      host: process.env.SMTP_HOST,
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS?.slice(0, 6) + '…', // masque partiellement
-      from: process.env.SMTP_FROM,
-    });
-    await transporter.sendMail({
-      from:    process.env.SMTP_FROM,
-      to:      user.email,
-      subject: 'Confirmez votre adresse email — Moozik',
-      html: `
-        <div style="font-family:sans-serif;padding:32px;max-width:480px;margin:auto;">
-          <h2 style="color:#dc2626;">Moozik</h2>
-          <p>Bonjour <strong>${user.nom}</strong>,</p>
-          <p>Merci de créer un compte ! Cliquez ci-dessous pour confirmer votre email.<br/>
-            Ce lien est valable <strong>24 heures</strong>.</p>
-          <p>
-            <a href="${verifyUrl}"
-              style="background:#dc2626;color:#fff;padding:14px 28px;border-radius:10px;
-                     text-decoration:none;font-weight:bold;display:inline-block;">
-              Confirmer mon email
-            </a>
-          </p>
-          <p style="color:#999;font-size:12px;">
-            Si vous n'avez pas créé de compte, ignorez cet email.
-          </p>
-        </div>
-      `,
-    });
+    // 3. Envoie le mail — si ça plante, supprime l'utilisateur créé
+    try {
+      await transporter.sendMail({
+        from:    process.env.SMTP_FROM,
+        to:      user.email,
+        subject: 'Confirmez votre adresse email — Moozik',
+        html: `
+          <div style="font-family:sans-serif;padding:32px;max-width:480px;margin:auto;">
+            <h2 style="color:#dc2626;">Moozik</h2>
+            <p>Bonjour <strong>${user.nom}</strong>,</p>
+            <p>Merci de créer un compte ! Cliquez ci-dessous pour confirmer votre email.<br/>
+              Ce lien est valable <strong>24 heures</strong>.</p>
+            <p>
+              <a href="${verifyUrl}"
+                style="background:#dc2626;color:#fff;padding:14px 28px;border-radius:10px;
+                       text-decoration:none;font-weight:bold;display:inline-block;">
+                Confirmer mon email
+              </a>
+            </p>
+            <p style="color:#999;font-size:12px;">
+              Si vous n'avez pas créé de compte, ignorez cet email.
+            </p>
+          </div>
+        `,
+      });
+    } catch (mailErr) {
+      // Rollback : supprime l'utilisateur si le mail échoue
+      await User.deleteOne({ _id: user._id });
+      console.error('[userRegister] Mail KO →', mailErr.message);
+      return res.status(500).json({ 
+        message: `Erreur envoi email : ${mailErr.message}` // ← message précis au frontend
+      });
+    }
 
     res.json({ message: 'Compte créé ! Vérifiez votre email pour activer votre compte.' });
-  } catch (e) { 
-    console.error('[userRegister]', e); // ← remplace e.message par e
-    res.status(500).json({ message: e.message }); 
+
+  } catch (e) {
+    console.error('[userRegister]', e);
+    res.status(500).json({ message: e.message });
   }
 };
 
@@ -333,17 +343,21 @@ exports.publicFavorites = async (req, res) => {
 exports.forgotPassword = async (req, res) => {
   const { email } = req.body;
   const GENERIC = 'Si cet email est associé à un compte, un lien de réinitialisation a été envoyé.';
-
   try {
     if (!email) return res.status(400).json({ message: 'Email requis.' });
-
     const normalizedEmail = email.toLowerCase().trim();
     const user = await User.findOne({ email: normalizedEmail });
     if (!user) return res.status(200).json({ message: GENERIC });
 
     const rawToken    = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const resetUrl    = `${process.env.FRONTEND_URL}/reset-password?token=${rawToken}`;
 
+    // 1. TEST SMTP avant toute écriture en base
+    const transporter = createTransporter();
+    await transporter.verify();
+
+    // 2. Écrit le token en base
     await User.findOneAndUpdate(
       { email: normalizedEmail },
       {
@@ -352,47 +366,50 @@ exports.forgotPassword = async (req, res) => {
           resetPasswordExpires: new Date(Date.now() + 15 * 60 * 1000),
         }
       },
-      { returnDocument: 'after', strict: false }
+      { strict: false }
     );
 
-    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${rawToken}`;
-
-    const transporter = createTransporter();
-    await transporter.sendMail({
-      from:    process.env.SMTP_FROM,
-      to:      user.email,
-      subject: 'Réinitialisation de votre mot de passe Moozik',
-      html: `
-        <div style="font-family:sans-serif;padding:32px;max-width:480px;margin:auto;">
-          <h2 style="color:#dc2626;">Moozik</h2>
-          <p>Bonjour <strong>${user.nom || user.email}</strong>,</p>
-          <p>Vous avez demandé la réinitialisation de votre mot de passe.<br/>
-            Ce lien est valable <strong>15 minutes</strong>.</p>
-          <p>
-            <a href="${resetUrl}"
-              style="background:#dc2626;color:#fff;padding:14px 28px;border-radius:10px;text-decoration:none;font-weight:bold;display:inline-block;">
-              Réinitialiser mon mot de passe
-            </a>
-          </p>
-          <p style="color:#999;font-size:12px;">
-            Si vous n'avez pas fait cette demande, ignorez cet email.<br/>
-            Lien direct : <a href="${resetUrl}">${resetUrl}</a>
-          </p>
-        </div>
-      `,
-    });
+    // 3. Envoie le mail — rollback token si échec
+    try {
+      await transporter.sendMail({
+        from:    process.env.SMTP_FROM,
+        to:      user.email,
+        subject: 'Réinitialisation de votre mot de passe Moozik',
+        html: `
+          <div style="font-family:sans-serif;padding:32px;max-width:480px;margin:auto;">
+            <h2 style="color:#dc2626;">Moozik</h2>
+            <p>Bonjour <strong>${user.nom || user.email}</strong>,</p>
+            <p>Vous avez demandé la réinitialisation de votre mot de passe.<br/>
+              Ce lien est valable <strong>15 minutes</strong>.</p>
+            <p>
+              <a href="${resetUrl}"
+                style="background:#dc2626;color:#fff;padding:14px 28px;border-radius:10px;
+                       text-decoration:none;font-weight:bold;display:inline-block;">
+                Réinitialiser mon mot de passe
+              </a>
+            </p>
+            <p style="color:#999;font-size:12px;">
+              Si vous n'avez pas fait cette demande, ignorez cet email.<br/>
+              Lien direct : <a href="${resetUrl}">${resetUrl}</a>
+            </p>
+          </div>
+        `,
+      });
+    } catch (mailErr) {
+      // Rollback : nettoie le token si le mail échoue
+      await User.findOneAndUpdate(
+        { email: normalizedEmail },
+        { $unset: { resetPasswordToken: '', resetPasswordExpires: '' } },
+        { strict: false }
+      );
+      console.error('[forgotPassword] Mail KO →', mailErr.message);
+      return res.status(500).json({ message: `Erreur envoi email : ${mailErr.message}` });
+    }
 
     return res.status(200).json({ message: GENERIC });
 
   } catch (e) {
     console.error('[forgotPassword]', e.message);
-    try {
-      await User.findOneAndUpdate(
-        { email: email?.toLowerCase().trim() },
-        { $unset: { resetPasswordToken: '', resetPasswordExpires: '' } },
-        { strict: false }
-      );
-    } catch (_) {}
     return res.status(500).json({ message: 'Erreur serveur. Veuillez réessayer.' });
   }
 };
