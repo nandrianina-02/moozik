@@ -149,6 +149,12 @@ exports.userRegister = async (req, res) => {
 
     const verifyUrl = `${process.env.FRONTEND_URL}/verify-email?token=${rawToken}`;
     const transporter = createTransporter();
+    console.log('[SMTP DEBUG]', {
+      host: process.env.SMTP_HOST,
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS?.slice(0, 6) + '…', // masque partiellement
+      from: process.env.SMTP_FROM,
+    });
     await transporter.sendMail({
       from:    process.env.SMTP_FROM,
       to:      user.email,
