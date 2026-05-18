@@ -180,7 +180,10 @@ exports.userRegister = async (req, res) => {
     });
 
     res.json({ message: 'Compte créé ! Vérifiez votre email pour activer votre compte.' });
-  } catch (e) { res.status(500).json({ message: e.message }); }
+  } catch (e) { 
+    console.error('[userRegister]', e); // ← remplace e.message par e
+    res.status(500).json({ message: e.message }); 
+  }
 };
 
 // GET /users/verify-email?token=xxx
