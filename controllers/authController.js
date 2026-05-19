@@ -5,19 +5,9 @@ const { Admin, User, Artist } = require('../models');
 const { signToken } = require('../middleware/auth');
 const { toCloud, AVT_TRANSFORM, IMG_TRANSFORM, fromCloud } = require('../middleware/upload');
 
-// ─── Transporteur email ───────────────────────────────────────────────────────
-function createTransporter() {
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT,
-    secure: false,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-    family: 4,
-  });
-}
+
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // ══════════════════════════════════════════════
 // ADMIN AUTH
@@ -127,85 +117,6 @@ exports.deleteAdmin = async (req, res) => {
 
 // POST /users/register
 
-exports.userRegister = async (req, res) => {
-  try {
-    const { email, password, nom } = req.body;
-    if (!email || !password)
-      return res.status(400).json({ message: 'Email et mot de passe requis' });
-
-    const normalizedEmail = email.toLowerCase().trim();
-    if (await User.findOne({ email: normalizedEmail }))
-      return res.status(400).json({ message: 'Email déjà utilisé' });
-
-    const rawToken    = crypto.randomBytes(32).toString('hex');
-    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
-    const verifyUrl   = `${process.env.FRONTEND_URL}/verify-email?token=${encodeURIComponent(rawToken)}`;
-
-    // 1. Test SMTP avant de créer l'utilisateur
-    const transporter = createTransporter();
-    await transporter.verify();
-
-    // 2. Crée l'utilisateur
-    const user = await new User({
-      email:      normalizedEmail,
-      password:   password,
-      nom:        nom || normalizedEmail.split('@')[0],
-      isVerified: false,
-    }).save();
-
-    // 3. ✅ Sauvegarde le token de vérification (corrige le bug select:false)
-    await User.updateOne(
-      { _id: user._id },
-      {
-        $set: {
-          verifyEmailToken:   hashedToken,
-          verifyEmailExpires: new Date(Date.now() + 24 * 60 * 60 * 1000), // +24h
-        }
-      }
-    );
-
-    console.log('[register] rawToken:', rawToken);
-    console.log('[register] hashedToken:', hashedToken);
-
-    // 4. Envoie le mail
-    try {
-      await transporter.sendMail({
-        from:    process.env.SMTP_FROM,
-        to:      user.email,
-        subject: 'Confirmez votre adresse email — Moozik',
-        html: `
-          <div style="font-family:sans-serif;padding:32px;max-width:480px;margin:auto;">
-            <h2 style="color:#dc2626;">Moozik</h2>
-            <p>Bonjour <strong>${user.nom}</strong>,</p>
-            <p>Merci de créer un compte ! Cliquez ci-dessous pour confirmer votre email.<br/>
-              Ce lien est valable <strong>24 heures</strong>.</p>
-            <p>
-              <a href="${verifyUrl}"
-                style="background:#dc2626;color:#fff;padding:14px 28px;border-radius:10px;
-                       text-decoration:none;font-weight:bold;display:inline-block;">
-                Confirmer mon email
-              </a>
-            </p>
-            <p style="color:#999;font-size:12px;">
-              Si vous n'avez pas créé de compte, ignorez cet email.
-            </p>
-          </div>
-        `,
-      });
-    } catch (mailErr) {
-      await User.deleteOne({ _id: user._id });
-      console.error('[userRegister] Mail KO →', mailErr.message);
-      return res.status(500).json({ message: `Erreur envoi email : ${mailErr.message}` });
-    }
-
-    // 5. ✅ Une seule réponse à la fin
-    return res.status(201).json({ message: 'Compte créé ! Vérifiez votre email pour activer votre compte.' });
-
-  } catch (e) {
-    console.error('[userRegister]', e);
-    res.status(500).json({ message: e.message });
-  }
-};
 
 // GET /users/verify-email?token=xxx
 exports.verifyEmail = async (req, res) => {
@@ -364,12 +275,85 @@ exports.publicFavorites = async (req, res) => {
 // USER — MOT DE PASSE OUBLIÉ
 // ══════════════════════════════════════════════
 
-// POST /users/forgot-password  { email }
+
+exports.userRegister = async (req, res) => {
+  try {
+    const { email, password, nom } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ message: 'Email et mot de passe requis' });
+
+    const normalizedEmail = email.toLowerCase().trim();
+    if (await User.findOne({ email: normalizedEmail }))
+      return res.status(400).json({ message: 'Email déjà utilisé' });
+
+    const rawToken    = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const verifyUrl   = `${process.env.FRONTEND_URL}/verify-email?token=${encodeURIComponent(rawToken)}`;
+
+    // 1. Crée l'utilisateur
+    const user = await new User({
+      email:      normalizedEmail,
+      password,
+      nom:        nom || normalizedEmail.split('@')[0],
+      isVerified: false,
+    }).save();
+
+    // 2. Sauvegarde le token
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          verifyEmailToken:   hashedToken,
+          verifyEmailExpires: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        }
+      }
+    );
+
+    // 3. Envoie le mail via Resend
+    try {
+      await resend.emails.send({
+        from:    process.env.RESEND_FROM, // ex: 'Moziik <noreply@tondomaine.com>'
+        to:      user.email,
+        subject: 'Confirmez votre adresse email — Moozik',
+        html: `
+          <div style="font-family:sans-serif;padding:32px;max-width:480px;margin:auto;">
+            <h2 style="color:#dc2626;">Moozik</h2>
+            <p>Bonjour <strong>${user.nom}</strong>,</p>
+            <p>Merci de créer un compte ! Cliquez ci-dessous pour confirmer votre email.<br/>
+              Ce lien est valable <strong>24 heures</strong>.</p>
+            <p>
+              <a href="${verifyUrl}"
+                style="background:#dc2626;color:#fff;padding:14px 28px;border-radius:10px;
+                       text-decoration:none;font-weight:bold;display:inline-block;">
+                Confirmer mon email
+              </a>
+            </p>
+            <p style="color:#999;font-size:12px;">
+              Si vous n'avez pas créé de compte, ignorez cet email.
+            </p>
+          </div>
+        `,
+      });
+    } catch (mailErr) {
+      await User.deleteOne({ _id: user._id });
+      console.error('[userRegister] Mail KO →', mailErr.message);
+      return res.status(500).json({ message: `Erreur envoi email : ${mailErr.message}` });
+    }
+
+    return res.status(201).json({ message: 'Compte créé ! Vérifiez votre email pour activer votre compte.' });
+
+  } catch (e) {
+    console.error('[userRegister]', e);
+    return res.status(500).json({ message: e.message });
+  }
+};
+
 exports.forgotPassword = async (req, res) => {
   const { email } = req.body;
   const GENERIC = 'Si cet email est associé à un compte, un lien de réinitialisation a été envoyé.';
   try {
     if (!email) return res.status(400).json({ message: 'Email requis.' });
+
     const normalizedEmail = email.toLowerCase().trim();
     const user = await User.findOne({ email: normalizedEmail });
     if (!user) return res.status(200).json({ message: GENERIC });
@@ -378,23 +362,21 @@ exports.forgotPassword = async (req, res) => {
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
     const resetUrl    = `${process.env.FRONTEND_URL}/reset-password?token=${rawToken}`;
 
-    // 1. TEST SMTP avant toute écriture en base
-    const transporter = createTransporter();
-    await transporter.verify();
+    // 1. Écrit le token en base
+    await User.updateOne(
+      { email: normalizedEmail },
+      {
+        $set: {
+          resetPasswordToken:   hashedToken,
+          resetPasswordExpires: new Date(Date.now() + 15 * 60 * 1000),
+        }
+      }
+    );
 
-    // 2. Écrit le token en base
-    // FIX Mongoose 9 : assignation directe sur l'instance pour garantir
-    // la persistance des champs select:false
-    const userToReset = await User.findOne({ email: normalizedEmail })
-      .select('+resetPasswordToken +resetPasswordExpires');
-    userToReset.resetPasswordToken   = hashedToken;
-    userToReset.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000);
-    await userToReset.save();
-
-    // 3. Envoie le mail — rollback token si échec
+    // 2. Envoie le mail via Resend
     try {
-      await transporter.sendMail({
-        from:    process.env.SMTP_FROM,
+      await resend.emails.send({
+        from:    process.env.RESEND_FROM,
         to:      user.email,
         subject: 'Réinitialisation de votre mot de passe Moozik',
         html: `
@@ -418,10 +400,11 @@ exports.forgotPassword = async (req, res) => {
         `,
       });
     } catch (mailErr) {
-      // Rollback : nettoie le token si le mail échoue
-      userToReset.resetPasswordToken   = undefined;
-      userToReset.resetPasswordExpires = undefined;
-      await userToReset.save();
+      // Rollback token si mail échoue
+      await User.updateOne(
+        { email: normalizedEmail },
+        { $unset: { resetPasswordToken: '', resetPasswordExpires: '' } }
+      );
       console.error('[forgotPassword] Mail KO →', mailErr.message);
       return res.status(500).json({ message: `Erreur envoi email : ${mailErr.message}` });
     }
