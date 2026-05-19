@@ -1,7 +1,9 @@
 const mongoose = require('mongoose');
+const bcrypt   = require('bcryptjs');
 const { Royalty } = require('../models/monetisationModels');
 const Play       = require('./Play');
 const { ArtistPayout } = require('../models/monetisationModels');
+
 // ── Artist ────────────────────────────────────
 const ArtistSchema = new mongoose.Schema({
   nom:            { type: String, required: true },
@@ -11,8 +13,8 @@ const ArtistSchema = new mongoose.Schema({
   email:          { type: String, unique: true, sparse: true },
   password:       String,
   role:           { type: String, default: 'artist' },
-  certified:    { type: Boolean, default: false },
-  certLevel:    { type: String, enum: ['blue','gold'], default: 'blue' },
+  certified:      { type: Boolean, default: false },
+  certLevel:      { type: String, enum: ['blue','gold'], default: 'blue' },
 }, { timestamps: true });
 
 // ── Album ─────────────────────────────────────
@@ -54,14 +56,68 @@ const AdminSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // ── User ──────────────────────────────────────
+// FIX : schéma complet avec tous les champs nécessaires à l'auth
+// (isVerified, banned, verifyEmailToken/Expires, resetPasswordToken/Expires)
 const UserSchema = new mongoose.Schema({
-  email:          { type: String, unique: true, required: true },
-  password:       { type: String, required: true },
-  nom:            { type: String, default: '' },
-  avatar:         { type: String, default: '' },
-  avatarPublicId: { type: String, default: '' },
-  role:           { type: String, default: 'user' },
+  nom: {
+    type: String,
+    trim: true,
+  },
+  email: {
+    type:      String,
+    required:  [true, 'Email requis'],
+    unique:    true,
+    lowercase: true,
+    trim:      true,
+  },
+  password: {
+    type:   String,
+    select: false,
+  },
+  role: {
+    type:    String,
+    enum:    ['user', 'artist', 'admin'],
+    default: 'user',
+  },
+  avatar: {
+    type:    String,
+    default: '',
+  },
+  avatarPublicId: {
+    type:    String,
+    default: '',
+  },
+  banned: {
+    type:    Boolean,
+    default: false,
+  },
+  isVerified: {
+    type:    Boolean,
+    default: false,
+  },
+  verifyEmailToken: {
+    type:   String,
+    select: false,
+  },
+  verifyEmailExpires: {
+    type:   Date,
+    select: false,
+  },
+  resetPasswordToken: {
+    type:   String,
+    select: false,
+  },
+  resetPasswordExpires: {
+    type:   Date,
+    select: false,
+  },
 }, { timestamps: true });
+
+// Hash du mot de passe avant sauvegarde
+UserSchema.pre('save', async function () {
+  if (!this.isModified('password') || !this.password) return;
+  this.password = await bcrypt.hash(this.password, 12);
+});
 
 // ── Playlist (admin) ──────────────────────────
 const PlaylistSchema = new mongoose.Schema({
@@ -149,27 +205,26 @@ const ShareHistorySchema = new mongoose.Schema({
 ShareHistorySchema.index({ shareToken: 1 }, { unique: true });
 ShareHistorySchema.index({ sharedBy: 1, createdAt: -1 });
 
-
 const {
   Lyrics, Certification, SmartLink, Featuring,
   ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription,
 } = require('./featureModels');
 
 // ── Register models ───────────────────────────
-const Artist       = mongoose.model('Artist',       ArtistSchema);
-const Album        = mongoose.model('Album',         AlbumSchema);
-const Song         = mongoose.model('Song',          SongSchema);
-const Admin        = mongoose.model('Admin',         AdminSchema);
-const User         = mongoose.model('User',          UserSchema);
-const Playlist     = mongoose.model('Playlist',      PlaylistSchema);
-const UserPlaylist = mongoose.model('UserPlaylist',  UserPlaylistSchema);
-const Comment      = mongoose.model('Comment',       CommentSchema);
-const Reaction     = mongoose.model('Reaction',      ReactionSchema);
-const UserPlay     = mongoose.model('UserPlay',      UserPlaySchema);
-const UserFavorite = mongoose.model('UserFavorite',  UserFavoriteSchema);
-const History      = mongoose.model('History',       HistorySchema);
-const Notification = mongoose.model('Notification',  NotificationSchema);
-const ShareHistory = mongoose.model('ShareHistory',  ShareHistorySchema);
+const Artist       = mongoose.models.Artist       || mongoose.model('Artist',       ArtistSchema);
+const Album        = mongoose.models.Album        || mongoose.model('Album',         AlbumSchema);
+const Song         = mongoose.models.Song         || mongoose.model('Song',          SongSchema);
+const Admin        = mongoose.models.Admin        || mongoose.model('Admin',         AdminSchema);
+const User         = mongoose.models.User         || mongoose.model('User',          UserSchema);
+const Playlist     = mongoose.models.Playlist     || mongoose.model('Playlist',      PlaylistSchema);
+const UserPlaylist = mongoose.models.UserPlaylist || mongoose.model('UserPlaylist',  UserPlaylistSchema);
+const Comment      = mongoose.models.Comment      || mongoose.model('Comment',       CommentSchema);
+const Reaction     = mongoose.models.Reaction     || mongoose.model('Reaction',      ReactionSchema);
+const UserPlay     = mongoose.models.UserPlay     || mongoose.model('UserPlay',      UserPlaySchema);
+const UserFavorite = mongoose.models.UserFavorite || mongoose.model('UserFavorite',  UserFavoriteSchema);
+const History      = mongoose.models.History      || mongoose.model('History',       HistorySchema);
+const Notification = mongoose.models.Notification || mongoose.model('Notification',  NotificationSchema);
+const ShareHistory = mongoose.models.ShareHistory || mongoose.model('ShareHistory',  ShareHistorySchema);
 
 // ── Indexes ───────────────────────────────────
 const createIndexes = () => {
@@ -187,7 +242,7 @@ const createIndexes = () => {
 module.exports = {
   Artist, Album, Song, Admin, User, Playlist, UserPlaylist,
   Comment, Reaction, UserPlay, UserFavorite, History, Notification,
-  ShareHistory, createIndexes,Lyrics, Certification, SmartLink, Featuring,
-  ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription, Royalty, Play, ArtistPayout,
+  ShareHistory, createIndexes, Lyrics, Certification, SmartLink, Featuring,
+  ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription,
+  Royalty, Play, ArtistPayout,
 };
-

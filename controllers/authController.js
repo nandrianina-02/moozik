@@ -6,12 +6,11 @@ const { signToken } = require('../middleware/auth');
 const { toCloud, AVT_TRANSFORM, IMG_TRANSFORM, fromCloud } = require('../middleware/upload');
 
 // ─── Transporteur email ───────────────────────────────────────────────────────
-// FIX : créé dans une fonction pour s'assurer que les vars .env sont bien chargées
 function createTransporter() {
   return nodemailer.createTransport({
-    host:   process.env.SMTP_HOST,
-    port:   465,
-    secure: true,   // ← obligatoire pour le port 465
+    host: process.env.SMTP_HOST,
+    port: process.env.SMTP_PORT,
+    secure: false,
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
@@ -125,36 +124,50 @@ exports.deleteAdmin = async (req, res) => {
 // ══════════════════════════════════════════════
 // USER AUTH
 // ══════════════════════════════════════════════
+
 // POST /users/register
+
 exports.userRegister = async (req, res) => {
   try {
     const { email, password, nom } = req.body;
-    if (!email || !password) 
+    if (!email || !password)
       return res.status(400).json({ message: 'Email et mot de passe requis' });
-    
+
     const normalizedEmail = email.toLowerCase().trim();
     if (await User.findOne({ email: normalizedEmail }))
       return res.status(400).json({ message: 'Email déjà utilisé' });
 
     const rawToken    = crypto.randomBytes(32).toString('hex');
     const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
-    const verifyUrl   = `${process.env.FRONTEND_URL}/verify-email?token=${rawToken}`;
+    const verifyUrl   = `${process.env.FRONTEND_URL}/verify-email?token=${encodeURIComponent(rawToken)}`;
 
-    // 1. TEST SMTP AVANT de créer l'utilisateur
+    // 1. Test SMTP avant de créer l'utilisateur
     const transporter = createTransporter();
-    await transporter.verify(); // ← plante ici si SMTP KO, pas après la création
+    await transporter.verify();
 
     // 2. Crée l'utilisateur
     const user = await new User({
-      email:              normalizedEmail,
-      password:           await bcrypt.hash(password, 12),
-      nom:                nom || normalizedEmail.split('@')[0],
-      isVerified:         false,
-      verifyEmailToken:   hashedToken,
-      verifyEmailExpires: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      email:      normalizedEmail,
+      password:   password,
+      nom:        nom || normalizedEmail.split('@')[0],
+      isVerified: false,
     }).save();
 
-    // 3. Envoie le mail — si ça plante, supprime l'utilisateur créé
+    // 3. ✅ Sauvegarde le token de vérification (corrige le bug select:false)
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          verifyEmailToken:   hashedToken,
+          verifyEmailExpires: new Date(Date.now() + 24 * 60 * 60 * 1000), // +24h
+        }
+      }
+    );
+
+    console.log('[register] rawToken:', rawToken);
+    console.log('[register] hashedToken:', hashedToken);
+
+    // 4. Envoie le mail
     try {
       await transporter.sendMail({
         from:    process.env.SMTP_FROM,
@@ -180,15 +193,13 @@ exports.userRegister = async (req, res) => {
         `,
       });
     } catch (mailErr) {
-      // Rollback : supprime l'utilisateur si le mail échoue
       await User.deleteOne({ _id: user._id });
       console.error('[userRegister] Mail KO →', mailErr.message);
-      return res.status(500).json({ 
-        message: `Erreur envoi email : ${mailErr.message}` // ← message précis au frontend
-      });
+      return res.status(500).json({ message: `Erreur envoi email : ${mailErr.message}` });
     }
 
-    res.json({ message: 'Compte créé ! Vérifiez votre email pour activer votre compte.' });
+    // 5. ✅ Une seule réponse à la fin
+    return res.status(201).json({ message: 'Compte créé ! Vérifiez votre email pour activer votre compte.' });
 
   } catch (e) {
     console.error('[userRegister]', e);
@@ -203,31 +214,47 @@ exports.verifyEmail = async (req, res) => {
     if (!token) return res.status(400).json({ message: 'Token manquant' });
 
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+    // Requête finale avec vérification expiration
     const user = await User.findOne({
       verifyEmailToken:   hashedToken,
       verifyEmailExpires: { $gt: new Date() },
-    });
+    }).select('+verifyEmailToken +verifyEmailExpires');
 
     if (!user) return res.status(400).json({ message: 'Lien invalide ou expiré.' });
 
-    await User.findByIdAndUpdate(user._id, {
-      $set:   { isVerified: true },
-      $unset: { verifyEmailToken: '', verifyEmailExpires: '' },
-    }, { strict: false });
+    // ✅ updateOne évite le pre-save hook et le problème select:false sur password
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $set:   { isVerified: true },
+        $unset: { verifyEmailToken: '', verifyEmailExpires: '' },
+      }
+    );
 
-    res.json({ message: 'Email confirmé ! Vous pouvez vous connecter.' });
-  } catch (e) { res.status(500).json({ message: e.message }); }
+    return res.json({ message: 'Email confirmé ! Vous pouvez vous connecter.' });
+
+  } catch (e) {
+    console.error('[verifyEmail]', e);
+    return res.status(500).json({ message: e.message });
+  }
 };
 
+// POST /users/login
+// FIX #1 + #2 : email et password extraits de req.body (étaient manquants → login impossible)
 exports.userLogin = async (req, res) => {
   try {
+    const { email, password } = req.body; // ← CORRECTION CRITIQUE
+    if (!email || !password)
+      return res.status(400).json({ message: 'Email et mot de passe requis' });
+
     const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
     if (!user || !await bcrypt.compare(password, user.password))
       return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
+
     if (user.banned)
       return res.status(403).json({ message: 'Compte suspendu.' });
 
-    // ← Vérification email
     if (!user.isVerified)
       return res.status(403).json({ message: 'Veuillez confirmer votre email avant de vous connecter.' });
 
@@ -255,10 +282,8 @@ exports.deleteUser = async (req, res) => {
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'Utilisateur introuvable' });
 
-    // Supprimer l'avatar Cloudinary
     if (user.avatarPublicId) await fromCloud(user.avatarPublicId).catch(() => {});
 
-    // Supprimer toutes les données liées
     await Promise.all([
       UserFavorite.deleteMany({ userId: req.params.id }),
       UserPlay.deleteMany({ userId: req.params.id }),
@@ -282,7 +307,7 @@ exports.updateUser = async (req, res) => {
     if (req.body.email) update.email = req.body.email.toLowerCase().trim();
     if (req.file) {
       const old = await User.findById(req.params.id);
-      if (old?.avatarPublicId) await fromCloud(old.avatarPublicId);
+      if (old?.avatarPublicId) await fromCloud(old.avatarPublicId).catch(() => {});
       const r = await toCloud(req.file.buffer, { folder: 'moozik/avatars', resource_type: 'image', transformation: AVT_TRANSFORM });
       update.avatar = r.secure_url; update.avatarPublicId = r.public_id;
     }
@@ -358,16 +383,13 @@ exports.forgotPassword = async (req, res) => {
     await transporter.verify();
 
     // 2. Écrit le token en base
-    await User.findOneAndUpdate(
-      { email: normalizedEmail },
-      {
-        $set: {
-          resetPasswordToken:   hashedToken,
-          resetPasswordExpires: new Date(Date.now() + 15 * 60 * 1000),
-        }
-      },
-      { strict: false }
-    );
+    // FIX Mongoose 9 : assignation directe sur l'instance pour garantir
+    // la persistance des champs select:false
+    const userToReset = await User.findOne({ email: normalizedEmail })
+      .select('+resetPasswordToken +resetPasswordExpires');
+    userToReset.resetPasswordToken   = hashedToken;
+    userToReset.resetPasswordExpires = new Date(Date.now() + 15 * 60 * 1000);
+    await userToReset.save();
 
     // 3. Envoie le mail — rollback token si échec
     try {
@@ -397,11 +419,9 @@ exports.forgotPassword = async (req, res) => {
       });
     } catch (mailErr) {
       // Rollback : nettoie le token si le mail échoue
-      await User.findOneAndUpdate(
-        { email: normalizedEmail },
-        { $unset: { resetPasswordToken: '', resetPasswordExpires: '' } },
-        { strict: false }
-      );
+      userToReset.resetPasswordToken   = undefined;
+      userToReset.resetPasswordExpires = undefined;
+      await userToReset.save();
       console.error('[forgotPassword] Mail KO →', mailErr.message);
       return res.status(500).json({ message: `Erreur envoi email : ${mailErr.message}` });
     }
@@ -420,11 +440,13 @@ exports.resetPassword = async (req, res) => {
   try {
     if (!token || !newPassword)
       return res.status(400).json({ message: 'Token et nouveau mot de passe requis.' });
-    if (newPassword.length < 8)
-      return res.status(400).json({ message: 'Trop court (8 min).' });
+    // FIX : aligné sur 6 caractères comme le register et changeUserPassword
+    if (newPassword.length < 6)
+      return res.status(400).json({ message: 'Trop court (6 min).' });
 
     const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
 
+    // resetPasswordToken/Expires ont select:false → forcer leur inclusion
     const user = await User.findOne({
       resetPasswordToken:   hashedToken,
       resetPasswordExpires: { $gt: new Date() },
@@ -433,14 +455,12 @@ exports.resetPassword = async (req, res) => {
     if (!user)
       return res.status(400).json({ message: 'Lien invalide ou expiré. Veuillez refaire une demande.' });
 
-    await User.findOneAndUpdate(
-      { _id: user._id },
-      {
-        $set:   { password: await bcrypt.hash(newPassword, 12) },
-        $unset: { resetPasswordToken: '', resetPasswordExpires: '' },
-      },
-      { strict: false }
-    );
+    // FIX : user.save() au lieu de findOneAndUpdate + strict:false
+    // Le hook pre('save') gère le hash automatiquement — pas besoin de bcrypt.hash ici
+    user.password             = newPassword; // le hook pre('save') hashera
+    user.resetPasswordToken   = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
 
     return res.status(200).json({ message: 'Mot de passe mis à jour. Vous pouvez vous connecter.' });
 
@@ -453,10 +473,14 @@ exports.resetPassword = async (req, res) => {
 // ══════════════════════════════════════════════
 // ARTIST AUTH
 // ══════════════════════════════════════════════
+
+// FIX #3 : email normalisé avec .toLowerCase().trim() comme dans userLogin
 exports.artistLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const artist = await Artist.findOne({ email });
+    if (!email || !password)
+      return res.status(400).json({ message: 'Email et mot de passe requis' });
+    const artist = await Artist.findOne({ email: email.toLowerCase().trim() }); // ← CORRECTION
     if (!artist?.password || !await bcrypt.compare(password, artist.password))
       return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
     const token = signToken({ id: artist._id, email: artist.email, nom: artist.nom, role: 'artist' }, '7d');
@@ -502,6 +526,7 @@ exports.createArtist = async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
+// FIX #5 : fromCloud avec await + .catch(() => {}) + guard if
 exports.updateArtist = async (req, res) => {
   try {
     if (req.user.role === 'artist' && String(req.user.id) !== String(req.params.id))
@@ -511,7 +536,7 @@ exports.updateArtist = async (req, res) => {
     if (req.body.bio !== undefined) update.bio = req.body.bio;
     if (req.file) {
       const existing = await Artist.findById(req.params.id);
-      await fromCloud(existing?.imagePublicId);
+      if (existing?.imagePublicId) await fromCloud(existing.imagePublicId).catch(() => {}); // ← CORRECTION
       const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
       update.image = r.secure_url; update.imagePublicId = r.public_id;
     }
@@ -519,6 +544,7 @@ exports.updateArtist = async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
+// FIX #5 : idem pour updateArtistMe
 exports.updateArtistMe = async (req, res) => {
   try {
     const update = {};
@@ -526,7 +552,7 @@ exports.updateArtistMe = async (req, res) => {
     if (req.body.bio !== undefined) update.bio = req.body.bio;
     if (req.file) {
       const old = await Artist.findById(req.user.id);
-      await fromCloud(old?.imagePublicId);
+      if (old?.imagePublicId) await fromCloud(old.imagePublicId).catch(() => {}); // ← CORRECTION
       const r = await toCloud(req.file.buffer, { folder: 'moozik/images', resource_type: 'image', transformation: IMG_TRANSFORM });
       update.image = r.secure_url; update.imagePublicId = r.public_id;
     }
@@ -534,10 +560,12 @@ exports.updateArtistMe = async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
 
+// FIX #4 : vérification existence artiste + 404 explicite
 exports.deleteArtist = async (req, res) => {
   try {
     const a = await Artist.findById(req.params.id);
-    await fromCloud(a?.imagePublicId);
+    if (!a) return res.status(404).json({ message: 'Artiste introuvable' }); // ← CORRECTION
+    if (a.imagePublicId) await fromCloud(a.imagePublicId).catch(() => {});   // ← CORRECTION
     await Artist.findByIdAndDelete(req.params.id);
     res.json({ message: 'Artiste supprimé' });
   } catch (e) { res.status(500).json({ message: e.message }); }
