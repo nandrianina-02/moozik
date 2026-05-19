@@ -93,6 +93,14 @@ const jwt = require('jsonwebtoken');
 const wss = new WebSocketServer({ server, path: '/ws/listeners' });
 const listeners = new Map();
 
+// Dans server.js, ajoute temporairement
+const https = require('https');
+https.get('https://api.ipify.org', (res) => {
+  let data = '';
+  res.on('data', chunk => data += chunk);
+  res.on('end', () => console.log('IP Render:', data));
+});
+
 setInterval(() => {
   listeners.forEach((v, k) => { if (v.ws.readyState !== 1) listeners.delete(k); });
 }, 30_000);

@@ -6,8 +6,17 @@ const { signToken } = require('../middleware/auth');
 const { toCloud, AVT_TRANSFORM, IMG_TRANSFORM, fromCloud } = require('../middleware/upload');
 
 
-const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
+function createTransporter() {
+  return nodemailer.createTransport({
+    host:   'smtp-relay.brevo.com',
+    port:   587,
+    secure: false,
+    auth: {
+      user: process.env.BREVO_USER,
+      pass: process.env.BREVO_PASS, 
+    },
+  });
+}
 
 // ══════════════════════════════════════════════
 // ADMIN AUTH
@@ -275,7 +284,6 @@ exports.publicFavorites = async (req, res) => {
 // USER — MOT DE PASSE OUBLIÉ
 // ══════════════════════════════════════════════
 
-
 exports.userRegister = async (req, res) => {
   try {
     const { email, password, nom } = req.body;
@@ -309,10 +317,11 @@ exports.userRegister = async (req, res) => {
       }
     );
 
-    // 3. Envoie le mail via Resend
+    // 3. Envoie le mail via Brevo
+    const transporter = createTransporter();
     try {
-      await resend.emails.send({
-        from:    process.env.RESEND_FROM, // ex: 'Moziik <noreply@tondomaine.com>'
+      await transporter.sendMail({
+        from:    process.env.BREVO_FROM,
         to:      user.email,
         subject: 'Confirmez votre adresse email — Moozik',
         html: `
@@ -373,10 +382,11 @@ exports.forgotPassword = async (req, res) => {
       }
     );
 
-    // 2. Envoie le mail via Resend
+    // 2. Envoie le mail via Brevo
+    const transporter = createTransporter();
     try {
-      await resend.emails.send({
-        from:    process.env.RESEND_FROM,
+      await transporter.sendMail({
+        from:    process.env.BREVO_FROM,
         to:      user.email,
         subject: 'Réinitialisation de votre mot de passe Moozik',
         html: `
@@ -400,7 +410,6 @@ exports.forgotPassword = async (req, res) => {
         `,
       });
     } catch (mailErr) {
-      // Rollback token si mail échoue
       await User.updateOne(
         { email: normalizedEmail },
         { $unset: { resetPasswordToken: '', resetPasswordExpires: '' } }
