@@ -69,6 +69,7 @@ const verifySession = async (token, req, requiredRole = null) => {
   const session = await Session.findOne({
     tokenHash: hashToken(decoded.sessionId),
     userId:    decoded.id,
+    status:    'active',
   }).select('+tokenHash');
 
   if (!session) {
