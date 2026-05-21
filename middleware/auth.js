@@ -77,11 +77,14 @@ const verifySession = async (token, req, requiredRole = null) => {
     throw err;
   }
 
-  // 4. Mise à jour silencieuse de lastSeenAt (toutes les 5 min max pour éviter
-  //    des écritures trop fréquentes)
+  // 4. Mise à jour silencieuse de lastSeenAt + requestCount
+  //    (toutes les 5 min max pour éviter des écritures trop fréquentes)
   const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
   if (session.lastSeenAt < fiveMinAgo) {
-    await Session.updateOne({ _id: session._id }, { $set: { lastSeenAt: new Date() } });
+    await Session.updateOne(
+      { _id: session._id },
+      { $set: { lastSeenAt: new Date() }, $inc: { requestCount: 1 } }
+    );
   }
 
   // 5. Vérification du rôle si exigé

@@ -1,42 +1,50 @@
 // utils/sessionHelper.js
-// ─────────────────────────────────────────────────────────────────────────────
-// Fonctions utilitaires pour créer une session unique lors de la connexion.
-// Utilisé par authController pour user, artist et admin.
-// ─────────────────────────────────────────────────────────────────────────────
-const Session = require('../models/Session');
+const Session  = require('../models/Session');
 const { signToken, hashToken, parseDevice, getIp, computeExpiresAt } = require('../middleware/auth');
 
 /**
- * Crée un token JWT + une session en base.
- * Supprime TOUTES les sessions précédentes du même user (session unique).
- *
- * @param {Object} payload   - Données à embarquer dans le JWT (id, email, role, nom…)
- * @param {Object} req       - Requête Express (pour UA et IP)
- * @param {string} duration  - Durée du token ex: '30d', '7d'
- * @returns {string}         - Le JWT signé
+ * Crée une session unique : révoque les précédentes (status=revoked),
+ * crée la nouvelle, retourne le JWT signé.
  */
 const createUniqueSession = async (payload, req, duration = '30d') => {
-  // 1. Signer le JWT (retourne token + sessionId)
   const { token, sessionId } = signToken(payload, duration);
+  const now = new Date();
 
-  // 2. Supprimer toutes les sessions précédentes → session unique
-  await Session.deleteMany({ userId: payload.id, role: payload.role });
+  // ── Marquer toutes les sessions actives précédentes comme révoquées ─────────
+  await Session.updateMany(
+    { userId: payload.id, role: payload.role, status: 'active' },
+    { $set: { status: 'revoked', disconnectedAt: now } }
+  );
 
-  // 3. Créer la nouvelle session en base
-  const device = parseDevice(req.headers['user-agent'] || '');
+  // ── Parser le User-Agent pour les infos appareil ───────────────────────────
+  const ua     = req.headers['user-agent'] || '';
+  const device = parseDevice(ua);
   const ip     = getIp(req);
 
+  // ── Créer la nouvelle session ──────────────────────────────────────────────
   await Session.create({
-    userId:    payload.id,
-    role:      payload.role,
-    tokenHash: hashToken(sessionId),
-    device,
+    userId:      payload.id,
+    role:        payload.role,
+    tokenHash:   hashToken(sessionId),
+    device:      { ...device, userAgent: ua },
     ip,
-    lastSeenAt: new Date(),
-    expiresAt:  computeExpiresAt(duration),
+    connectedAt: now,
+    lastSeenAt:  now,
+    status:      'active',
+    expiresAt:   computeExpiresAt(duration),
   });
 
   return token;
 };
 
-module.exports = { createUniqueSession };
+/**
+ * Marque une session comme déconnectée proprement (logout).
+ */
+const closeSession = async (userId, sessionId, reason = 'logout') => {
+  await Session.findOneAndUpdate(
+    { userId, tokenHash: hashToken(sessionId), status: 'active' },
+    { $set: { status: reason, disconnectedAt: new Date() } }
+  );
+};
+
+module.exports = { createUniqueSession, closeSession };
