@@ -10,9 +10,8 @@
  *
  * Variables .env :
  *   ANTHROPIC_API_KEY=sk-ant-...     (analyse de sentiment IA)
- *   SMTP_HOST=smtp.gmail.com
- *   SMTP_USER=...
- *   SMTP_PASS=...
+ *   BREVO_USER=...
+ *   BREVO_PASS=...
  *   FRONTEND_URL=https://moozik.app
  */
 
@@ -749,9 +748,17 @@ const generateWeeklyReports = async () => {
 const sendWeeklyEmail = async (artist, data) => {
   try {
     let nodemailer; try { nodemailer = require('nodemailer'); } catch { return; }
-    const transporter = nodemailer.createTransport({ host: process.env.SMTP_HOST, port: 587, auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } });
+    const transporter = nodemailer.createTransport({
+      host:   'smtp-relay.brevo.com',
+      port:   587,
+      secure: false,
+      auth: {
+        user: process.env.BREVO_USER,
+        pass: process.env.BREVO_PASS,
+      },
+    });
     await transporter.sendMail({
-      from: `MOOZIK <${process.env.SMTP_USER}>`,
+      from: `MOOZIK <${process.env.BREVO_USER}>`,
       to: artist.email,
       subject: `📊 Votre rapport de la semaine ${data.week}`,
       html: `
@@ -808,4 +815,3 @@ module.exports = router;
 module.exports.trackDemographics = trackDemographics;
 module.exports.addPoints = addPoints;
 module.exports.analyzeCommentSentiment = analyzeCommentSentiment;
-

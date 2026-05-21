@@ -406,10 +406,6 @@ router.get('/artists/:id/tips', requireAdminOrArtist, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// 4. ROYALTIES ARTISTES
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
 // GET â€” dashboard royalties artiste
 router.get('/artists/:id/royalties', requireAdminOrArtist, async (req, res) => {
   try {
@@ -516,10 +512,6 @@ router.post('/admin/royalties/payout', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// FIX #1 â€” Admin : aperÃ§u global royalties
-// Correction : try/catch explicite + log d'erreur
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.get('/admin/royalties', requireAdmin, async (req, res) => {
   try {
     const period = req.query.period || currentPeriod();
@@ -558,9 +550,6 @@ router.get('/admin/royalties', requireAdmin, async (req, res) => {
   }
 });
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// 5. PUBLICITÃ‰ AUDIO (AUDIO ADS)
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 router.get('/ads/next', optionalAuth, async (req, res) => {
   try {
@@ -644,9 +633,6 @@ router.put('/admin/ads/:id', requireAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// 6. BILLETTERIE Ã‰VÃ‰NEMENTS
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 router.post('/events', requireAdminOrArtist, upload.single('image'), async (req, res) => {
   try {
@@ -812,13 +798,6 @@ router.get('/tickets/scan/:qrCode', requireAdminOrArtist, async (req, res) => {
   } catch (e) { res.status(500).json({ message: e.message }); }
 });
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// FIX #2 â€” Admin : ventes billets par Ã©vÃ©nement
-// Corrections :
-//   - .lean() sur Event.find() â†’ plus de .toObject() nÃ©cessaire
-//   - try/catch individuel par event dans Promise.all
-//   - $match utilise ev._id directement (lean retourne un plain object)
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.get('/admin/events', requireAdmin, async (req, res) => {
   try {
     const events = await Event.find()
@@ -858,9 +837,6 @@ router.get('/admin/events', requireAdmin, async (req, res) => {
   }
 });
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// STRIPE WEBHOOK
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 router.post('/webhooks/stripe',
   express.raw({ type: 'application/json' }),
   async (req, res) => {
@@ -964,9 +940,6 @@ router.post('/webhooks/stripe',
   }
 );
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// CONFIG MONÃ‰TISATION (admin)
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 router.get('/admin/monetisation/config', requireAdmin, async (_req, res) => {
   try {
     const configs = await MonetisationConfig.find();
