@@ -4,6 +4,7 @@ const nodemailer = require('nodemailer');
 const { Admin, User, Artist } = require('../models');
 const { signToken } = require('../middleware/auth');
 const { toCloud, AVT_TRANSFORM, IMG_TRANSFORM, fromCloud } = require('../middleware/upload');
+const { createUniqueSession } = require('../utils/sessionHelper');
 
 
 function createTransporter() {
@@ -38,10 +39,23 @@ exports.adminLogin = async (req, res) => {
     const admin = await Admin.findOne({ email });
     if (!admin || !await bcrypt.compare(password, admin.password))
       return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
-    const token = signToken({ id: admin._id, email: admin.email, role: 'admin' }, '7d');
-    res.json({ token, email: admin.email, role: 'admin', nom: admin.nom || '', isPrimary: admin.isPrimary });
+ 
+    const token = await createUniqueSession(
+      { id: admin._id, email: admin.email, role: 'admin' },
+      req,
+      '7d'
+    );
+ 
+    res.json({
+      token,
+      email:     admin.email,
+      role:      'admin',
+      nom:       admin.nom || '',
+      isPrimary: admin.isPrimary,
+    });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
+
 
 exports.adminVerify = async (req, res) => {
   try {
@@ -164,24 +178,37 @@ exports.verifyEmail = async (req, res) => {
 // FIX #1 + #2 : email et password extraits de req.body (étaient manquants → login impossible)
 exports.userLogin = async (req, res) => {
   try {
-    const { email, password } = req.body; // ← CORRECTION CRITIQUE
+    const { email, password } = req.body;
     if (!email || !password)
       return res.status(400).json({ message: 'Email et mot de passe requis' });
-
+ 
     const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
     if (!user || !await bcrypt.compare(password, user.password))
       return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
-
+ 
     if (user.banned)
       return res.status(403).json({ message: 'Compte suspendu.' });
-
+ 
     if (!user.isVerified)
       return res.status(403).json({ message: 'Veuillez confirmer votre email avant de vous connecter.' });
-
-    const token = signToken({ id: user._id, email: user.email, nom: user.nom, role: 'user' });
-    res.json({ token, email: user.email, nom: user.nom, role: 'user', userId: user._id, avatar: user.avatar || '' });
+ 
+    const token = await createUniqueSession(
+      { id: user._id, email: user.email, nom: user.nom, role: 'user' },
+      req,
+      '30d'
+    );
+ 
+    res.json({
+      token,
+      email:  user.email,
+      nom:    user.nom,
+      role:   'user',
+      userId: user._id,
+      avatar: user.avatar || '',
+    });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
+
 
 exports.userVerify = async (req, res) => {
   try {
@@ -472,13 +499,28 @@ exports.artistLogin = async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password)
       return res.status(400).json({ message: 'Email et mot de passe requis' });
-    const artist = await Artist.findOne({ email: email.toLowerCase().trim() }); // ← CORRECTION
+ 
+    const artist = await Artist.findOne({ email: email.toLowerCase().trim() });
     if (!artist?.password || !await bcrypt.compare(password, artist.password))
       return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
-    const token = signToken({ id: artist._id, email: artist.email, nom: artist.nom, role: 'artist' }, '7d');
-    res.json({ token, email: artist.email, nom: artist.nom, role: 'artist', artisteId: artist._id, image: artist.image || '' });
+ 
+    const token = await createUniqueSession(
+      { id: artist._id, email: artist.email, nom: artist.nom, role: 'artist' },
+      req,
+      '7d'
+    );
+ 
+    res.json({
+      token,
+      email:     artist.email,
+      nom:       artist.nom,
+      role:      'artist',
+      artisteId: artist._id,
+      image:     artist.image || '',
+    });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
+
 
 exports.artistVerify = (req, res) => res.json({ valid: true, ...req.user });
 

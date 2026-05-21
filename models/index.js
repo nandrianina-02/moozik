@@ -3,6 +3,7 @@ const bcrypt   = require('bcryptjs');
 const { Royalty } = require('../models/monetisationModels');
 const Play       = require('./Play');
 const { ArtistPayout } = require('../models/monetisationModels');
+const Session = require('./Session');
 
 // ── Artist ────────────────────────────────────
 const ArtistSchema = new mongoose.Schema({
@@ -244,5 +245,5 @@ module.exports = {
   Comment, Reaction, UserPlay, UserFavorite, History, Notification,
   ShareHistory, createIndexes, Lyrics, Certification, SmartLink, Featuring,
   ScheduledRelease, ArtistFollower, NewsletterCampaign, PushSubscription,
-  Royalty, Play, ArtistPayout,
+  Royalty, Play, ArtistPayout,Session
 };

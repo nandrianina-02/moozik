@@ -9,6 +9,8 @@ const featureRoutes = require('./featureRoutes');
 
 const monetisationModels = require('../models/monetisationModels');
 
+const sessionRoutes = require('./sessionRoutes');
+
 router.use('/', featureRoutes);
 
 // ══════════════════════════════════════════════
@@ -58,6 +60,7 @@ router.get('/admin/admins',     auth.requireAdmin, ac.listAdmins);
 router.post('/admin/admins',    auth.requireAdmin, ac.createAdmin);
 router.put('/admin/admins/:id', auth.requireAdmin, ac.updateAdmin);
 router.delete('/admin/admins/:id', auth.requireAdmin, ac.deleteAdmin);
+router.use('/sessions', sessionRoutes);
 
 // Admin stats
 router.get('/admin/stats',                  auth.requireAdmin, admin.getStats);
