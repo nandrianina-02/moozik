@@ -2,6 +2,9 @@ const { Song, UserFavorite, UserPlay, History, Notification, ShareHistory, User 
 const { toCloud, fromCloud, IMG_TRANSFORM }  = require('../middleware/upload');
 const { signToken, verifyToken } = require('../middleware/auth');
 
+// Polyfill fetch pour Node < 18
+const fetch = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
+
 // ── GET /songs ────────────────────────────────
 exports.listSongs = async (req, res) => {
   try {
@@ -75,12 +78,9 @@ exports.toggleLike = async (req, res) => {
 // ── PUT /songs/:id/play ───────────────────────
 exports.registerPlay = async (req, res) => {
   try {
-    // 1. Fetch song first — everything else depends on it
-    const song = await Song.findByIdAndUpdate(
-      req.params.id,
-      { $inc: { plays: 1 } },
-      { returnDocument: 'after' }
-    );
+    // 1. Fetch song — ne pas incrémenter ici : playController.recordPlay
+    //    s'en charge déjà via $inc: { plays: 1 }. Double appel = double comptage.
+    const song = await Song.findById(req.params.id);
     if (!song) return res.status(404).json({ message: 'Introuvable' });
 
     // 2. Decode token (used by multiple branches below)
@@ -369,4 +369,3 @@ exports.globalSearch = async (req, res) => {
     res.json({ songs, artists, albums, playlists });
   } catch (e) { res.status(500).json({ message: e.message }); }
 };
-

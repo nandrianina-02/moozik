@@ -4,6 +4,9 @@ const {
   Comment, Reaction, UserPlay, UserFavorite, History,
   Notification, ShareHistory,
 } = require('../models');
+// Vérification explicite — crash immédiat au démarrage plutôt qu'au runtime
+if (!Reaction) throw new Error('[adminController] Reaction est undefined — vérifiez l\'export dans ../models');
+
 const { toCloud, fromCloud, IMG_TRANSFORM } = require('../middleware/upload');
 
 // ══════════════════════════════════════════════
@@ -435,10 +438,10 @@ exports.broadcastNewsletter = async (req, res) => {
 
     const nodemailer  = require('nodemailer');
     const transporter = nodemailer.createTransport({
-      host:   process.env.SMTP_HOST,
-      port:   Number(process.env.SMTP_PORT) || 587,
-      secure: process.env.SMTP_SECURE === 'true',
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      host:   'smtp-relay.brevo.com',
+      port:   587,
+      secure: false,
+      auth: { user: process.env.BREVO_USER, pass: process.env.BREVO_PASS },
     });
 
     const users  = await User.find({}, 'email').lean();
