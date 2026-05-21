@@ -6,41 +6,47 @@ const Session = require('../models/Session');
 const { hashToken } = require('../middleware/auth');
 
 // ── GET /sessions ─────────────────────────────────────────────────────────────
-// Retourne toutes les sessions actives de l'utilisateur connecté
+// Retourne { active, history, stats } — format attendu par le frontend
 exports.listSessions = async (req, res) => {
   try {
-    const sessions = await Session.find({ userId: req.user.id, role: req.user.role })
-      .select('-tokenHash')   // ne jamais exposer le hash
-      .sort({ lastSeenAt: -1 });
-
-    // Marquer la session courante
+    // 1. Identifier la session courante via son hash
     const currentHash = hashToken(req.user.sessionId);
-    const result = sessions.map(s => ({
-      ...s.toObject(),
-      isCurrent: hashToken(req.user.sessionId) === (() => {
-        // On recharge le hash depuis le doc sans le select (déjà exclu)
-        // On compare via un identifiant indirect : createdAt + ip
-        return false; // recalculé ci-dessous
-      })(),
-    }));
-
-    // Récupérer la session courante avec son hash pour la marquer
     const currentSession = await Session.findOne({
       userId:    req.user.id,
       tokenHash: currentHash,
     }).select('_id');
-
     const currentId = currentSession?._id?.toString();
 
-    res.json(sessions.map(s => ({
-      _id:        s._id,
-      device:     s.device,
-      ip:         s.ip,
-      lastSeenAt: s.lastSeenAt,
-      createdAt:  s.createdAt,
-      expiresAt:  s.expiresAt,
-      isCurrent:  s._id.toString() === currentId,
-    })));
+    // 2. Récupérer toutes les sessions de cet utilisateur
+    const HISTORY_STATUSES = ['revoked', 'logout', 'expired'];
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const allSessions = await Session.find({ userId: req.user.id })
+      .select('-tokenHash')
+      .sort({ lastSeenAt: -1 });
+
+    // 3. Sérialiser avec isCurrent
+    const serialize = (s) => ({
+      ...s.toObject(),
+      isCurrent: s._id.toString() === currentId,
+    });
+
+    // 4. Séparer actives / historique
+    const active  = allSessions
+      .filter(s => s.status === 'active')
+      .map(serialize);
+
+    const history = allSessions
+      .filter(s => HISTORY_STATUSES.includes(s.status) && s.connectedAt >= thirtyDaysAgo)
+      .map(serialize);
+
+    // 5. Stats
+    const stats = {
+      totalActive:  active.length,
+      totalHistory: history.length,
+    };
+
+    res.json({ active, history, stats });
   } catch (e) {
     console.error('[listSessions]', e);
     res.status(500).json({ message: e.message });
@@ -59,7 +65,10 @@ exports.revokeSession = async (req, res) => {
       return res.status(403).json({ message: 'Accès refusé' });
     }
 
-    await Session.deleteOne({ _id: req.params.id });
+    await Session.updateOne(
+      { _id: req.params.id },
+      { $set: { status: 'revoked', disconnectedAt: new Date() } }
+    );
     res.json({ message: 'Session révoquée' });
   } catch (e) {
     console.error('[revokeSession]', e);
@@ -82,8 +91,11 @@ exports.revokeAllOther = async (req, res) => {
     const filter = { userId: req.user.id, role: req.user.role };
     if (current) filter._id = { $ne: current._id };
 
-    const { deletedCount } = await Session.deleteMany(filter);
-    res.json({ message: `${deletedCount} session(s) révoquée(s)` });
+    const { modifiedCount } = await Session.updateMany(
+      filter,
+      { $set: { status: 'revoked', disconnectedAt: new Date() } }
+    );
+    res.json({ message: `${modifiedCount} session(s) révoquée(s)` });
   } catch (e) {
     console.error('[revokeAllOther]', e);
     res.status(500).json({ message: e.message });
@@ -103,6 +115,21 @@ exports.logout = async (req, res) => {
     res.json({ message: 'Déconnecté' });
   } catch (e) {
     console.error('[logout]', e);
+    res.status(500).json({ message: e.message });
+  }
+};
+
+// ── DELETE /sessions/history ──────────────────────────────────────────────────
+// Supprime définitivement l'historique (sessions non-actives) de l'utilisateur
+exports.clearHistory = async (req, res) => {
+  try {
+    const { deletedCount } = await Session.deleteMany({
+      userId: req.user.id,
+      status: { $in: ['revoked', 'logout', 'expired'] },
+    });
+    res.json({ message: `${deletedCount} session(s) supprimée(s) de l'historique` });
+  } catch (e) {
+    console.error('[clearHistory]', e);
     res.status(500).json({ message: e.message });
   }
 };
