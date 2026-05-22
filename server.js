@@ -42,6 +42,26 @@ app.use((req, res, next) => {
 });
 
 app.use(compression({ level: 6, threshold: 1024 }));
+
+// ── Cache-Control headers ─────────────────────
+// Assets statiques (JS, CSS, images) — cache 1 an (Vite génère des noms hashés)
+app.use((req, res, next) => {
+  const url = req.url;
+  // Fichiers avec hash dans le nom → immutables
+  if (/\.(js|css|woff2?|ttf|eot)$/.test(url) && /[a-f0-9]{8}/.test(url)) {
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+  }
+  // Images statiques → cache 7 jours
+  else if (/\.(png|jpg|jpeg|svg|ico|webp)$/.test(url)) {
+    res.set('Cache-Control', 'public, max-age=604800');
+  }
+  // HTML → pas de cache (toujours la dernière version)
+  else if (/\.html$/.test(url) || url === '/') {
+    res.set('Cache-Control', 'no-cache');
+  }
+  next();
+});
+
 app.use(express.json());
 
 // ── MongoDB ───────────────────────────────────
@@ -136,4 +156,3 @@ wss.on('connection', ws => {
   ws.on('close', () => { listeners.forEach((v, k) => { if (v.ws === ws) listeners.delete(k); }); broadcast(); });
   ws.on('error', () => ws.close());
 });
-
